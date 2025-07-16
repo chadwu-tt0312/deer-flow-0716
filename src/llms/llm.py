@@ -88,7 +88,10 @@ def _create_llm_use_conf(llm_type: LLMType, conf: Dict[str, Any]) -> BaseChatMod
     if "azure_endpoint" in merged_conf or os.getenv("AZURE_OPENAI_ENDPOINT"):
         return AzureChatOpenAI(**merged_conf)
     if llm_type == "reasoning":
-        return ChatDeepSeek(**merged_conf)
+        if "deepseek" in merged_conf["api_base"]:
+            return ChatDeepSeek(**merged_conf)
+        else:
+            return ChatOpenAI(**merged_conf)
     else:
         return ChatOpenAI(**merged_conf)
 
@@ -105,6 +108,7 @@ def get_llm_by_type(
     conf = load_yaml_config(_get_config_file_path())
     llm = _create_llm_use_conf(llm_type, conf)
     _llm_cache[llm_type] = llm
+    # print(f"type = {llm_type}, llm = {llm.__class__.__name__}, conf = {conf}")
     return llm
 
 

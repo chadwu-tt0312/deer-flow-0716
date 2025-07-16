@@ -38,6 +38,13 @@ const config = {
     return config;
   },
 
+  // Allowed development origins for cross-origin requests
+  allowedDevOrigins: [
+    "localhost",
+    "127.0.0.1",
+    "192.168.31.*", // your IP
+    "*.local"
+  ],
   // ... rest of the configuration.
   output: "standalone",
 };

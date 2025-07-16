@@ -7,9 +7,15 @@ Server script for running the DeerFlow API.
 
 import argparse
 import logging
+import os
 import signal
 import sys
 import uvicorn
+from urllib.parse import urlparse
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # Configure logging
 logging.basicConfig(
@@ -18,6 +24,20 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger(__name__)
+
+
+def get_server_config_from_env():
+    """Extract host and port from NEXT_PUBLIC_API_URL environment variable."""
+    api_url = os.getenv("NEXT_PUBLIC_API_URL")
+    if api_url:
+        try:
+            parsed = urlparse(api_url)
+            host = parsed.hostname or "localhost"
+            port = parsed.port or 8000
+            return host, port
+        except Exception as e:
+            logger.warning(f"Failed to parse NEXT_PUBLIC_API_URL: {e}")
+    return None, None
 
 
 def handle_shutdown(signum, frame):
@@ -31,6 +51,9 @@ signal.signal(signal.SIGTERM, handle_shutdown)
 signal.signal(signal.SIGINT, handle_shutdown)
 
 if __name__ == "__main__":
+    # Get server config from environment first
+    env_host, env_port = get_server_config_from_env()
+    
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Run the DeerFlow API server")
     parser.add_argument(
@@ -41,14 +64,14 @@ if __name__ == "__main__":
     parser.add_argument(
         "--host",
         type=str,
-        default="localhost",
-        help="Host to bind the server to (default: localhost)",
+        default=env_host or "localhost",
+        help=f"Host to bind the server to (default: {env_host or 'localhost'}, from NEXT_PUBLIC_API_URL if set)",
     )
     parser.add_argument(
         "--port",
         type=int,
-        default=8000,
-        help="Port to bind the server to (default: 8000)",
+        default=env_port or 8000,
+        help=f"Port to bind the server to (default: {env_port or 8000}, from NEXT_PUBLIC_API_URL if set)",
     )
     parser.add_argument(
         "--log-level",
@@ -66,6 +89,8 @@ if __name__ == "__main__":
         reload = True
 
     try:
+        if env_host or env_port:
+            logger.info(f"Using server configuration from NEXT_PUBLIC_API_URL: {os.getenv('NEXT_PUBLIC_API_URL')}")
         logger.info(f"Starting DeerFlow API server on {args.host}:{args.port}")
         uvicorn.run(
             "src.server:app",
