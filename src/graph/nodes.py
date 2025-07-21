@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: MIT
 
 import json
-import logging
 import os
 from typing import Annotated, Literal
 
@@ -27,11 +26,12 @@ from src.llms.llm import get_llm_by_type
 from src.prompts.planner_model import Plan
 from src.prompts.template import apply_prompt_template
 from src.utils.json_utils import repair_json_output
+from src.logging import get_logger, set_thread_context
 
 from .types import State
 from ..config import SELECTED_SEARCH_ENGINE, SearchEngine
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @tool
@@ -46,27 +46,27 @@ def handoff_to_planner(
 
 
 def background_investigation_node(state: State, config: RunnableConfig):
+    # 設定執行緒上下文
+    thread_id = config.get("thread_id", "default")
+    set_thread_context(thread_id)
+
     logger.info("background investigation node is running.")
     configurable = Configuration.from_runnable_config(config)
     query = state.get("research_topic")
     background_investigation_results = None
     if SELECTED_SEARCH_ENGINE == SearchEngine.TAVILY.value:
-        searched_content = LoggedTavilySearch(
-            max_results=configurable.max_search_results
-        ).invoke(query)
+        searched_content = LoggedTavilySearch(max_results=configurable.max_search_results).invoke(
+            query
+        )
         if isinstance(searched_content, list):
             background_investigation_results = [
                 f"## {elem['title']}\n\n{elem['content']}" for elem in searched_content
             ]
             return {
-                "background_investigation_results": "\n\n".join(
-                    background_investigation_results
-                )
+                "background_investigation_results": "\n\n".join(background_investigation_results)
             }
         else:
-            logger.error(
-                f"Tavily search returned malformed response: {searched_content}"
-            )
+            logger.error(f"Tavily search returned malformed response: {searched_content}")
     else:
         background_investigation_results = get_web_search_tool(
             configurable.max_search_results
@@ -82,7 +82,11 @@ def planner_node(
     state: State, config: RunnableConfig
 ) -> Command[Literal["human_feedback", "reporter"]]:
     """Planner node that generate the full plan."""
-    logger.info("Planner generating full plan")
+    # 設定執行緒上下文
+    thread_id = config.get("thread_id", "default")
+    set_thread_context(thread_id)
+
+    logger.info("Planner generating full plan", node="planner")
     configurable = Configuration.from_runnable_config(config)
     plan_iterations = state["plan_iterations"] if state.get("plan_iterations", 0) else 0
     messages = apply_prompt_template("planner", state, configurable)
@@ -154,8 +158,13 @@ def planner_node(
 
 
 def human_feedback_node(
-    state,
+    state, config: RunnableConfig = None
 ) -> Command[Literal["planner", "research_team", "reporter", "__end__"]]:
+    # 設定執行緒上下文
+    if config:
+        thread_id = config.get("thread_id", "default")
+        set_thread_context(thread_id)
+
     current_plan = state.get("current_plan", "")
     # check if the plan is auto accepted
     auto_accepted_plan = state.get("auto_accepted_plan", False)
@@ -207,7 +216,11 @@ def coordinator_node(
     state: State, config: RunnableConfig
 ) -> Command[Literal["planner", "background_investigator", "__end__"]]:
     """Coordinator node that communicate with customers."""
-    logger.info("Coordinator talking.")
+    # 設定執行緒上下文
+    thread_id = config.get("thread_id", "default")
+    set_thread_context(thread_id)
+
+    logger.info("Coordinator talking.", node="coordinator")
     configurable = Configuration.from_runnable_config(config)
     messages = apply_prompt_template("coordinator", state)
     response = (
@@ -230,9 +243,9 @@ def coordinator_node(
             for tool_call in response.tool_calls:
                 if tool_call.get("name", "") != "handoff_to_planner":
                     continue
-                if tool_call.get("args", {}).get("locale") and tool_call.get(
-                    "args", {}
-                ).get("research_topic"):
+                if tool_call.get("args", {}).get("locale") and tool_call.get("args", {}).get(
+                    "research_topic"
+                ):
                     locale = tool_call.get("args", {}).get("locale")
                     research_topic = tool_call.get("args", {}).get("research_topic")
                     break
@@ -256,6 +269,10 @@ def coordinator_node(
 
 def reporter_node(state: State, config: RunnableConfig):
     """Reporter node that write a final report."""
+    # 設定執行緒上下文
+    thread_id = config.get("thread_id", "default")
+    set_thread_context(thread_id)
+
     logger.info("Reporter write final report")
     configurable = Configuration.from_runnable_config(config)
     current_plan = state.get("current_plan")
@@ -293,16 +310,26 @@ def reporter_node(state: State, config: RunnableConfig):
     return {"final_report": response_content}
 
 
-def research_team_node(state: State):
+def research_team_node(state: State, config: RunnableConfig = None):
     """Research team node that collaborates on tasks."""
+    # 設定執行緒上下文
+    if config:
+        thread_id = config.get("thread_id", "default")
+        set_thread_context(thread_id)
+
     logger.info("Research team is collaborating on tasks.")
     pass
 
 
 async def _execute_agent_step(
-    state: State, agent, agent_name: str
+    state: State, agent, agent_name: str, config: RunnableConfig = None
 ) -> Command[Literal["research_team"]]:
     """Helper function to execute a step using the specified agent."""
+    # 設定執行緒上下文
+    if config:
+        thread_id = config.get("thread_id", "default")
+        set_thread_context(thread_id)
+
     current_plan = state.get("current_plan")
     observations = state.get("observations", [])
 
@@ -385,9 +412,7 @@ async def _execute_agent_step(
         recursion_limit = default_recursion_limit
 
     logger.info(f"Agent input: {agent_input}")
-    result = await agent.ainvoke(
-        input=agent_input, config={"recursion_limit": recursion_limit}
-    )
+    result = await agent.ainvoke(input=agent_input, config={"recursion_limit": recursion_limit})
 
     # Process the result
     response_content = result["messages"][-1].content
@@ -440,10 +465,7 @@ async def _setup_and_execute_agent_step(
     # Extract MCP server configuration for this agent type
     if configurable.mcp_settings:
         for server_name, server_config in configurable.mcp_settings["servers"].items():
-            if (
-                server_config["enabled_tools"]
-                and agent_type in server_config["add_to_agents"]
-            ):
+            if server_config["enabled_tools"] and agent_type in server_config["add_to_agents"]:
                 mcp_servers[server_name] = {
                     k: v
                     for k, v in server_config.items()
@@ -463,18 +485,22 @@ async def _setup_and_execute_agent_step(
                     )
                     loaded_tools.append(tool)
             agent = create_agent(agent_type, agent_type, loaded_tools, agent_type)
-            return await _execute_agent_step(state, agent, agent_type)
+            return await _execute_agent_step(state, agent, agent_type, config)
     else:
         # Use default tools if no MCP servers are configured
         agent = create_agent(agent_type, agent_type, default_tools, agent_type)
-        return await _execute_agent_step(state, agent, agent_type)
+        return await _execute_agent_step(state, agent, agent_type, config)
 
 
 async def researcher_node(
     state: State, config: RunnableConfig
 ) -> Command[Literal["research_team"]]:
     """Researcher node that do research"""
-    logger.info("Researcher node is researching.")
+    # 設定執行緒上下文
+    thread_id = config.get("thread_id", "default")
+    set_thread_context(thread_id)
+
+    logger.info("Researcher node is researching.", node="researcher")
     configurable = Configuration.from_runnable_config(config)
     tools = [get_web_search_tool(configurable.max_search_results), crawl_tool]
     retriever_tool = get_retriever_tool(state.get("resources", []))
@@ -489,11 +515,13 @@ async def researcher_node(
     )
 
 
-async def coder_node(
-    state: State, config: RunnableConfig
-) -> Command[Literal["research_team"]]:
+async def coder_node(state: State, config: RunnableConfig) -> Command[Literal["research_team"]]:
     """Coder node that do code analysis."""
-    logger.info("Coder node is coding.")
+    # 設定執行緒上下文
+    thread_id = config.get("thread_id", "default")
+    set_thread_context(thread_id)
+
+    logger.info("Coder node is coding.", node="coder")
     return await _setup_and_execute_agent_step(
         state,
         config,

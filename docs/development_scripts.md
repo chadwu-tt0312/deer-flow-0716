@@ -48,18 +48,6 @@ pnpm dev:warmup
 - 支援多主機檢測
 - 顯示配置資訊和訪問 URL
 
-#### `web/scripts/warm-up.js`
-
-預熱腳本，自動訪問路由進行預編譯。
-
-**使用方法：**
-
-```bash
-cd web
-node scripts/warm-up.js
-```
-
-**功能：**
 - 自動訪問 `/chat` 和主頁路由
 - 自動檢測本機 IP 地址
 - 支援多主機檢測（localhost, 127.0.0.1, 自動檢測的 IP）

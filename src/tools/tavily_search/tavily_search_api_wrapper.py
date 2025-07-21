@@ -12,6 +12,8 @@ from langchain_community.utilities.tavily_search import (
     TavilySearchAPIWrapper as OriginalTavilySearchAPIWrapper,
 )
 
+from src.utils.network_config import network_config
+
 
 class EnhancedTavilySearchAPIWrapper(OriginalTavilySearchAPIWrapper):
     def raw_results(
@@ -38,10 +40,14 @@ class EnhancedTavilySearchAPIWrapper(OriginalTavilySearchAPIWrapper):
             "include_images": include_images,
             "include_image_descriptions": include_image_descriptions,
         }
+        # 取得網路配置
+        request_config = network_config.get_request_config(f"{TAVILY_API_URL}/search")
+
         response = requests.post(
             # type: ignore
             f"{TAVILY_API_URL}/search",
             json=params,
+            **request_config,
         )
         response.raise_for_status()
         return response.json()
@@ -85,9 +91,7 @@ class EnhancedTavilySearchAPIWrapper(OriginalTavilySearchAPIWrapper):
         results_json_str = await fetch()
         return json.loads(results_json_str)
 
-    def clean_results_with_images(
-        self, raw_results: Dict[str, List[Dict]]
-    ) -> List[Dict]:
+    def clean_results_with_images(self, raw_results: Dict[str, List[Dict]]) -> List[Dict]:
         results = raw_results["results"]
         """Clean results from Tavily Search API."""
         clean_results = []

@@ -1,22 +1,17 @@
 # Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
 # SPDX-License-Identifier: MIT
 
-import logging
 from src.graph import build_graph
+from src.logging import get_logger
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,  # Default level is INFO
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
+logger = get_logger(__name__)
 
 
 def enable_debug_logging():
     """Enable debug level logging for more detailed execution information."""
-    logging.getLogger("src").setLevel(logging.DEBUG)
+    # TODO: 實作 debug 模式
+    pass
 
-
-logger = logging.getLogger(__name__)
 
 # Create the graph
 graph = build_graph()
@@ -74,9 +69,7 @@ async def run_agent_workflow_async(
         "recursion_limit": 100,
     }
     last_message_cnt = 0
-    async for s in graph.astream(
-        input=initial_state, config=config, stream_mode="values"
-    ):
+    async for s in graph.astream(input=initial_state, config=config, stream_mode="values"):
         try:
             if isinstance(s, dict) and "messages" in s:
                 if len(s["messages"]) <= last_message_cnt:

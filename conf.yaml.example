@@ -25,16 +25,38 @@ BASIC_MODEL:
 
 
 # OTHER SETTINGS:
-# Search engine configuration (Only supports Tavily currently)
+# Search engine configuration
 # SEARCH_ENGINE:
-#   engine: tavily
-#   # Only include results from these domains
+#   engine: tavily  # 選擇: tavily, duckduckgo, brave_search, arxiv, grounding_bing
+#   # Only include results from these domains (僅支援 Tavily)
 #   include_domains:
 #     - example.com
 #     - trusted-news.com
 #     - reliable-source.org
 #     - gov.cn
 #     - edu.cn
-#   # Exclude results from these domains
+#   # Exclude results from these domains (僅支援 Tavily)
 #   exclude_domains:
 #     - example.com
+#   # Grounding Bing Search 配置 (僅當 engine 為 grounding_bing 時生效)
+#   market: zh-tw
+#   set_lang: zh-hant
+
+# LOGGING SETTINGS:
+# Logging configuration for DeerFlow
+# Options:
+# - file: Log to files in logs/ directory
+# - sqlite://path/to/db.sqlite: Log to SQLite database
+# - postgresql://user:pass@host:port/dbname: Log to PostgreSQL database
+LOGGING:
+  provider: "file"  # Default: file
+  level: "INFO"     # Options: DEBUG, INFO, WARNING, ERROR
+  
+  file_settings:
+    log_dir: "logs"
+    max_days: 10
+    compress_old_files: true
+    
+  # Database connection examples:
+  # provider: "sqlite:///logs/deerflow.db"
+  # provider: "postgresql://postgres:password@localhost:5432/deerflow_logs"

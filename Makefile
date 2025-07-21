@@ -1,4 +1,4 @@
-.PHONY: lint format install-dev serve test coverage
+.PHONY: lint format install-dev serve test coverage build-wheels install-wheels download-wheels-offline
 
 install-dev:
 	uv pip install -e ".[dev]" && uv pip install -e ".[test]"
@@ -21,3 +21,12 @@ langgraph-dev:
 
 coverage:
 	uv run pytest --cov=src tests/ --cov-report=term-missing --cov-report=xml
+
+build-wheels:
+	python scripts/build_wheels_uv.py
+
+install-wheels:
+	python scripts/install_wheels_uv.py
+
+download-wheels-offline:
+	python scripts/download_volcengine_offline.py

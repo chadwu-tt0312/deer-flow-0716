@@ -6,6 +6,8 @@ import os
 
 import requests
 
+from src.utils.network_config import network_config
+
 logger = logging.getLogger(__name__)
 
 
@@ -22,5 +24,12 @@ class JinaClient:
                 "Jina API key is not set. Provide your own key to access a higher rate limit. See https://jina.ai/reader for more information."
             )
         data = {"url": url}
-        response = requests.post("https://r.jina.ai/", headers=headers, json=data)
+
+        # 更新 headers，加入網路配置
+        headers = network_config.update_headers(headers)
+
+        # 取得網路配置
+        request_config = network_config.get_request_config("https://r.jina.ai/")
+
+        response = requests.post("https://r.jina.ai/", headers=headers, json=data, **request_config)
         return response.text

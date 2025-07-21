@@ -9,7 +9,6 @@ from src.config import SearchEngine
 
 
 class TestGetWebSearchTool:
-
     @patch("src.tools.search.SELECTED_SEARCH_ENGINE", SearchEngine.TAVILY.value)
     def test_get_web_search_tool_tavily(self):
         tool = get_web_search_tool(max_search_results=5)
@@ -40,11 +39,24 @@ class TestGetWebSearchTool:
         assert tool.api_wrapper.load_max_docs == 2
         assert tool.api_wrapper.load_all_available_meta is True
 
+    @patch("src.tools.search.SELECTED_SEARCH_ENGINE", SearchEngine.GROUNDING_BING.value)
+    @patch.dict(
+        os.environ,
+        {
+            "GROUNDING_BING_CLIENT_ID": "test_client_id",
+            "GROUNDING_BING_CLIENT_SECRET": "test_client_secret",
+            "GROUNDING_BING_TENANT_ID": "test_tenant_id",
+            "GROUNDING_BING_CONNECTION_ID": "test_connection_id",
+        },
+    )
+    def test_get_web_search_tool_grounding_bing(self):
+        tool = get_web_search_tool(max_search_results=5)
+        assert tool.name == "web_search"
+        assert tool.max_results == 5
+
     @patch("src.tools.search.SELECTED_SEARCH_ENGINE", "unsupported_engine")
     def test_get_web_search_tool_unsupported_engine(self):
-        with pytest.raises(
-            ValueError, match="Unsupported search engine: unsupported_engine"
-        ):
+        with pytest.raises(ValueError, match="Unsupported search engine: unsupported_engine"):
             get_web_search_tool(max_search_results=1)
 
     @patch("src.tools.search.SELECTED_SEARCH_ENGINE", SearchEngine.BRAVE_SEARCH.value)

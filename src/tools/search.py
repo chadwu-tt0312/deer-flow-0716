@@ -14,6 +14,9 @@ from src.config import load_yaml_config
 from src.tools.tavily_search.tavily_search_results_with_images import (
     TavilySearchResultsWithImages,
 )
+from src.tools.grounding_bing_search.grounding_bing_search_tool import (
+    GroundingBingSearchTool,
+)
 
 from src.tools.decorators import create_logged_tool
 
@@ -24,6 +27,7 @@ LoggedTavilySearch = create_logged_tool(TavilySearchResultsWithImages)
 LoggedDuckDuckGoSearch = create_logged_tool(DuckDuckGoSearchResults)
 LoggedBraveSearch = create_logged_tool(BraveSearch)
 LoggedArxivSearch = create_logged_tool(ArxivQueryRun)
+LoggedGroundingBingSearch = create_logged_tool(GroundingBingSearchTool)
 
 
 def get_search_config():
@@ -74,6 +78,20 @@ def get_web_search_tool(max_search_results: int):
                 top_k_results=max_search_results,
                 load_max_docs=max_search_results,
                 load_all_available_meta=True,
+            ),
+        )
+    elif SELECTED_SEARCH_ENGINE == SearchEngine.GROUNDING_BING.value:
+        return LoggedGroundingBingSearch(
+            name="web_search",
+            max_results=max_search_results,
+            market=search_config.get("market", "zh-tw"),
+            set_lang=search_config.get("set_lang", "zh-hant"),
+            client_id=os.getenv("GROUNDING_BING_CLIENT_ID", ""),
+            client_secret=os.getenv("GROUNDING_BING_CLIENT_SECRET", ""),
+            tenant_id=os.getenv("GROUNDING_BING_TENANT_ID", ""),
+            connection_id=os.getenv("GROUNDING_BING_CONNECTION_ID", ""),
+            base_url=os.getenv(
+                "GROUNDING_BING_BASE_URL", "http://172.16.128.4:11009/api/projects/searchProject"
             ),
         )
     else:

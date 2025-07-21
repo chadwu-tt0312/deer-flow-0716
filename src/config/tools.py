@@ -13,6 +13,7 @@ class SearchEngine(enum.Enum):
     DUCKDUCKGO = "duckduckgo"
     BRAVE_SEARCH = "brave_search"
     ARXIV = "arxiv"
+    GROUNDING_BING = "grounding_bing"
 
 
 # Tool configuration

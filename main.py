@@ -12,6 +12,7 @@ from InquirerPy import inquirer
 
 from src.config.questions import BUILT_IN_QUESTIONS, BUILT_IN_QUESTIONS_ZH_CN
 from src.workflow import run_agent_workflow_async
+from src.logging import init_logging
 
 
 def ask(
@@ -62,28 +63,18 @@ def main(
     ).execute()
 
     # Choose questions based on language
-    questions = (
-        BUILT_IN_QUESTIONS if language == "English" else BUILT_IN_QUESTIONS_ZH_CN
-    )
-    ask_own_option = (
-        "[Ask my own question]" if language == "English" else "[自定义问题]"
-    )
+    questions = BUILT_IN_QUESTIONS if language == "English" else BUILT_IN_QUESTIONS_ZH_CN
+    ask_own_option = "[Ask my own question]" if language == "English" else "[自定义问题]"
 
     # Select a question
     initial_question = inquirer.select(
-        message=(
-            "What do you want to know?" if language == "English" else "您想了解什么?"
-        ),
+        message=("What do you want to know?" if language == "English" else "您想了解什么?"),
         choices=[ask_own_option] + questions,
     ).execute()
 
     if initial_question == ask_own_option:
         initial_question = inquirer.text(
-            message=(
-                "What do you want to know?"
-                if language == "English"
-                else "您想了解什么?"
-            ),
+            message=("What do you want to know?" if language == "English" else "您想了解什么?"),
         ).execute()
 
     # Pass all parameters to ask function
@@ -97,6 +88,9 @@ def main(
 
 
 if __name__ == "__main__":
+    # 初始化 logging 系統
+    init_logging()
+
     # Set up argument parser
     parser = argparse.ArgumentParser(description="Run the Deer")
     parser.add_argument("query", nargs="*", help="The query to process")

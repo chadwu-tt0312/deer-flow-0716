@@ -17,13 +17,13 @@ from dotenv import load_dotenv
 # Load environment variables from .env file
 load_dotenv()
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-)
+# Import DeerFlow logging
+from src.logging import init_logging, get_logger
 
-logger = logging.getLogger(__name__)
+# Initialize DeerFlow logging
+init_logging()
+
+logger = get_logger(__name__)
 
 
 def get_server_config_from_env():
@@ -53,7 +53,7 @@ signal.signal(signal.SIGINT, handle_shutdown)
 if __name__ == "__main__":
     # Get server config from environment first
     env_host, env_port = get_server_config_from_env()
-    
+
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Run the DeerFlow API server")
     parser.add_argument(
@@ -90,7 +90,9 @@ if __name__ == "__main__":
 
     try:
         if env_host or env_port:
-            logger.info(f"Using server configuration from NEXT_PUBLIC_API_URL: {os.getenv('NEXT_PUBLIC_API_URL')}")
+            logger.info(
+                f"Using server configuration from NEXT_PUBLIC_API_URL: {os.getenv('NEXT_PUBLIC_API_URL')}"
+            )
         logger.info(f"Starting DeerFlow API server on {args.host}:{args.port}")
         uvicorn.run(
             "src.server:app",

@@ -3,7 +3,6 @@
 
 import base64
 import json
-import logging
 import os
 from typing import Annotated, List, cast
 from uuid import uuid4
@@ -41,8 +40,9 @@ from src.server.rag_request import (
     RAGResourcesResponse,
 )
 from src.tools import VolcengineTTS
+from src.logging import get_logger, set_thread_context
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 INTERNAL_SERVER_ERROR_DETAIL = "Internal Server Error"
 
@@ -69,6 +69,16 @@ async def chat_stream(request: ChatRequest):
     thread_id = request.thread_id
     if thread_id == "__default__":
         thread_id = str(uuid4())
+
+    # 記錄 API 呼叫（在 default.log 中）
+    logger.info("Chat stream started", node="frontend")
+
+    # 在 default.log 中記錄 thread 開始
+    from src.logging.context import clear_thread_context
+
+    clear_thread_context()
+    logger.info(f"Thread [{thread_id}] started", node="system")
+
     return StreamingResponse(
         _astream_workflow_generator(
             request.model_dump()["messages"],
@@ -102,6 +112,8 @@ async def _astream_workflow_generator(
     report_style: ReportStyle,
     enable_deep_thinking: bool,
 ):
+    # 設定執行緒上下文（所有後續日誌都會記錄到 thread-specific 檔案）
+    set_thread_context(thread_id)
     input_ = {
         "messages": messages,
         "plan_iterations": 0,
@@ -150,9 +162,7 @@ async def _astream_workflow_generator(
                     },
                 )
             continue
-        message_chunk, message_metadata = cast(
-            tuple[BaseMessage, dict[str, any]], event_data
-        )
+        message_chunk, message_metadata = cast(tuple[BaseMessage, dict[str, any]], event_data)
         event_stream_message: dict[str, any] = {
             "thread_id": thread_id,
             "agent": agent[0].split(":")[0],
@@ -177,19 +187,21 @@ async def _astream_workflow_generator(
             if message_chunk.tool_calls:
                 # AI Message - Tool Call
                 event_stream_message["tool_calls"] = message_chunk.tool_calls
-                event_stream_message["tool_call_chunks"] = (
-                    message_chunk.tool_call_chunks
-                )
+                event_stream_message["tool_call_chunks"] = message_chunk.tool_call_chunks
                 yield _make_event("tool_calls", event_stream_message)
             elif message_chunk.tool_call_chunks:
                 # AI Message - Tool Call Chunks
-                event_stream_message["tool_call_chunks"] = (
-                    message_chunk.tool_call_chunks
-                )
+                event_stream_message["tool_call_chunks"] = message_chunk.tool_call_chunks
                 yield _make_event("tool_call_chunks", event_stream_message)
             else:
                 # AI Message - Raw message tokens
                 yield _make_event("message_chunk", event_stream_message)
+
+    # 在 default.log 中記錄 thread 結束
+    from src.logging.context import clear_thread_context
+
+    clear_thread_context()
+    logger.info(f"Thread [{thread_id}] completed", node="system")
 
 
 def _make_event(event_type: str, data: dict[str, any]):
@@ -206,9 +218,7 @@ async def text_to_speech(request: TTSRequest):
         raise HTTPException(status_code=400, detail="VOLCENGINE_TTS_APPID is not set")
     access_token = os.getenv("VOLCENGINE_TTS_ACCESS_TOKEN", "")
     if not access_token:
-        raise HTTPException(
-            status_code=400, detail="VOLCENGINE_TTS_ACCESS_TOKEN is not set"
-        )
+        raise HTTPException(status_code=400, detail="VOLCENGINE_TTS_ACCESS_TOKEN is not set")
 
     try:
         cluster = os.getenv("VOLCENGINE_TTS_CLUSTER", "volcano_tts")
@@ -243,9 +253,7 @@ async def text_to_speech(request: TTSRequest):
             content=audio_data,
             media_type=f"audio/{request.encoding}",
             headers={
-                "Content-Disposition": (
-                    f"attachment; filename=tts_output.{request.encoding}"
-                )
+                "Content-Disposition": (f"attachment; filename=tts_output.{request.encoding}")
             },
         )
 
@@ -328,9 +336,7 @@ async def enhance_prompt(request: EnhancePromptRequest):
                     "NEWS": ReportStyle.NEWS,
                     "SOCIAL_MEDIA": ReportStyle.SOCIAL_MEDIA,
                 }
-                report_style = style_mapping.get(
-                    request.report_style.upper(), ReportStyle.ACADEMIC
-                )
+                report_style = style_mapping.get(request.report_style.upper(), ReportStyle.ACADEMIC)
             except Exception:
                 # If invalid style, default to ACADEMIC
                 report_style = ReportStyle.ACADEMIC

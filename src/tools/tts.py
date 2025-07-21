@@ -11,6 +11,8 @@ import logging
 import requests
 from typing import Optional, Dict, Any
 
+from src.utils.network_config import network_config
+
 logger = logging.getLogger(__name__)
 
 
@@ -104,8 +106,15 @@ class VolcengineTTS:
         try:
             sanitized_text = text.replace("\r\n", "").replace("\n", "")
             logger.debug(f"Sending TTS request for text: {sanitized_text[:50]}...")
+
+            # 更新 headers，加入網路配置
+            headers = network_config.update_headers(self.header)
+
+            # 取得網路配置
+            request_config = network_config.get_request_config(self.api_url)
+
             response = requests.post(
-                self.api_url, json.dumps(request_json), headers=self.header
+                self.api_url, json.dumps(request_json), headers=headers, **request_config
             )
             response_json = response.json()
 

@@ -6,6 +6,8 @@ import requests
 from src.rag.retriever import Chunk, Document, Resource, Retriever
 from urllib.parse import urlparse
 
+from src.utils.network_config import network_config
+
 
 class RAGFlowProvider(Retriever):
     """
@@ -55,8 +57,14 @@ class RAGFlowProvider(Retriever):
             "page_size": self.page_size,
         }
 
+        # 更新 headers，加入網路配置
+        headers = network_config.update_headers(headers)
+
+        # 取得網路配置
+        request_config = network_config.get_request_config(f"{self.api_url}/api/v1/retrieval")
+
         response = requests.post(
-            f"{self.api_url}/api/v1/retrieval", headers=headers, json=payload
+            f"{self.api_url}/api/v1/retrieval", headers=headers, json=payload, **request_config
         )
 
         if response.status_code != 200:
@@ -96,8 +104,14 @@ class RAGFlowProvider(Retriever):
         if query:
             params["name"] = query
 
+        # 更新 headers，加入網路配置
+        headers = network_config.update_headers(headers)
+
+        # 取得網路配置
+        request_config = network_config.get_request_config(f"{self.api_url}/api/v1/datasets")
+
         response = requests.get(
-            f"{self.api_url}/api/v1/datasets", headers=headers, params=params
+            f"{self.api_url}/api/v1/datasets", headers=headers, params=params, **request_config
         )
 
         if response.status_code != 200:
