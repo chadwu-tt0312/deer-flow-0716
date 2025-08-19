@@ -90,7 +90,7 @@ workflows:
 # 工具配置
 tools:
   web_search:
-    provider: "tavily" # tavily, brave_search, duckduckgo
+    provider: "tavily" # tavily, brave_search, duckduckgo, arxiv, grounding_bing
     max_results: 5
 
   code_execution:

@@ -168,8 +168,8 @@ def mock_env_vars():
         yield env_vars
 
 
-@pytest.fixture
-async def event_loop():
+@pytest.fixture(scope="function")
+def event_loop():
     """提供事件循環"""
     loop = asyncio.new_event_loop()
     yield loop
