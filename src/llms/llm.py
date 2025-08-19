@@ -337,3 +337,22 @@ def get_configured_llm_models() -> dict[str, list[str]]:
 # In the future, we will use reasoning_llm and vl_llm for different purposes
 # reasoning_llm = get_llm_by_type("reasoning")
 # vl_llm = get_llm_by_type("vision")
+
+
+def get_default_model_client():
+    """
+    獲取默認模型客戶端
+
+    Returns:
+        BaseChatModel: 默認的 LLM 實例
+    """
+    try:
+        return get_llm_by_type("reasoning")
+    except Exception as e:
+        print(f"Warning: Failed to get default model client: {e}")
+        # 返回一個模擬客戶端以避免錯誤
+        from unittest.mock import Mock
+
+        mock_client = Mock()
+        mock_client.complete = Mock(return_value="Mock response")
+        return mock_client

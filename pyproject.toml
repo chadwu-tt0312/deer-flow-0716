@@ -13,7 +13,9 @@ dependencies = [
     "langchain-community>=0.3.19",
     "langchain-experimental>=0.3.4",
     "langchain-openai>=0.3.8",
-    "langgraph>=0.3.5",
+    "langgraph>=0.3.5", # 將逐步移除 (漸進式遷移)
+    "pyautogen>=0.4.0", # Microsoft AutoGen 框架
+    "autogen-agentchat>=0.4.0", # AutoGen AgentChat 模組
     "readabilipy>=0.3.0",
     "python-dotenv>=1.0.1",
     "socksio>=1.0.0",
@@ -43,9 +45,10 @@ dev = [
     "langgraph-cli[inmem]>=0.2.10",
 ]
 test = [
-    "pytest>=7.4.0",
-    "pytest-cov>=4.1.0",
+    "pytest>=8.3.5",
+    "pytest-cov>=6.0.0",
     "pytest-asyncio>=1.0.0",
+    "pytest-mock>=3.14.1",
 ]
 
 [tool.uv]
@@ -75,3 +78,13 @@ extend-exclude = '''
 # in the root of the project.
 ^/build/
 '''
+
+[dependency-groups]
+dev = [
+    "coverage>=7.6.12",
+    "psutil>=7.0.0",
+    "pytest>=8.3.5",
+    "pytest-asyncio>=1.0.0",
+    "pytest-cov>=6.0.0",
+    "pytest-mock>=3.14.1",
+]

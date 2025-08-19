@@ -1,0 +1,111 @@
+{
+  "timestamp": "2025-08-19T15:11:43.298885",
+  "summary": {
+    "total_tests": 8,
+    "passed": 8,
+    "failed": 0,
+    "errors": 0,
+    "success_rate": 100.0
+  },
+  "categories": {
+    "基本導入": {
+      "total": 4,
+      "passed": 4
+    },
+    "環境變數": {
+      "total": 1,
+      "passed": 1
+    },
+    "系統切換": {
+      "total": 1,
+      "passed": 1
+    },
+    "基本功能": {
+      "total": 1,
+      "passed": 1
+    },
+    "健康檢查": {
+      "total": 1,
+      "passed": 1
+    }
+  },
+  "detailed_results": [
+    {
+      "category": "基本導入",
+      "test_name": "AutoGen 系統模組",
+      "status": "PASS",
+      "execution_time": 0.2665133476257324,
+      "details": {
+        "import_path": "src.autogen_system"
+      }
+    },
+    {
+      "category": "基本導入",
+      "test_name": "autogen-core 套件",
+      "status": "PASS",
+      "execution_time": 0.0,
+      "details": {
+        "import_path": "autogen_core"
+      }
+    },
+    {
+      "category": "基本導入",
+      "test_name": "pytest 測試框架",
+      "status": "PASS",
+      "execution_time": 0.07452225685119629,
+      "details": {
+        "import_path": "pytest"
+      }
+    },
+    {
+      "category": "基本導入",
+      "test_name": "logging 模組",
+      "status": "PASS",
+      "execution_time": 0.0,
+      "details": {
+        "import_path": "src.logging"
+      }
+    },
+    {
+      "category": "環境變數",
+      "test_name": "環境變數檢查",
+      "status": "PASS",
+      "execution_time": 0.0,
+      "details": {
+        "USE_AUTOGEN_SYSTEM": "true",
+        "current_system": "AutoGen"
+      }
+    },
+    {
+      "category": "系統切換",
+      "test_name": "系統切換測試",
+      "status": "PASS",
+      "execution_time": 0.0,
+      "details": {
+        "langgraph_system": "LangGraph",
+        "autogen_system": "AutoGen"
+      }
+    },
+    {
+      "category": "基本功能",
+      "test_name": "檔案操作測試",
+      "status": "PASS",
+      "execution_time": 0.0010008811950683594,
+      "details": {
+        "current_dir": "D:\\_Code\\_GitHub\\deer-flow-0716",
+        "file_content": "測試檔案"
+      }
+    },
+    {
+      "category": "健康檢查",
+      "test_name": "系統健康檢查",
+      "status": "PASS",
+      "execution_time": 0.0,
+      "details": {
+        "current_system": "AutoGen",
+        "python_version": "3.12.10 (tags/v3.12.10:0cc8128, Apr  8 2025, 12:21:36) [MSC v.1943 64 bit (AMD64)]",
+        "timestamp": "2025-08-19T15:11:43.297885"
+      }
+    }
+  ]
+}

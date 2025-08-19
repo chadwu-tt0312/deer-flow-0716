@@ -1,0 +1,210 @@
+# AutoGen系統測試 Makefile
+# Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
+# SPDX-License-Identifier: MIT
+
+.PHONY: help test test-unit test-integration test-performance test-all clean coverage lint format install-deps
+
+# Default target
+help:
+	@echo "AutoGen System Test Commands:"
+	@echo ""
+	@echo "  make test-unit          - Run unit tests"
+	@echo "  make test-integration   - Run integration tests"
+	@echo "  make test-performance   - Run performance tests"
+	@echo "  make test-all          - Run all tests"
+	@echo "  make test              - Run all tests (default)"
+	@echo "  make coverage          - Run tests with coverage report"
+	@echo "  make lint              - Run code linting"
+	@echo "  make format            - Format code"
+	@echo "  make clean             - Clean test files"
+	@echo "  make install-deps      - Install test dependencies"
+	@echo ""
+
+# 變數定義
+PYTHON := python
+TEST_DIR := tests/autogen_system
+REPORT_DIR := test_reports
+SOURCE_DIR := src/autogen_system
+
+# 安裝測試依賴
+install-deps:
+	@echo "Installing test dependencies..."
+	$(PYTHON) -m pip install pytest pytest-asyncio pytest-mock pytest-cov coverage psutil
+
+# 單元測試
+test-unit:
+	@echo "Running AutoGen unit tests..."
+	$(PYTHON) -m pytest $(TEST_DIR)/unit -v --tb=short --durations=10
+
+# 集成測試
+test-integration:
+	@echo "Running AutoGen integration tests..."
+	$(PYTHON) -m pytest $(TEST_DIR)/integration -v --tb=short --durations=10 -m "not performance and not benchmark"
+
+# 性能測試
+test-performance:
+	@echo "Running AutoGen performance tests..."
+	$(PYTHON) -m pytest $(TEST_DIR)/integration/test_performance.py -v --tb=short -m "performance or benchmark"
+
+# 所有測試
+test-all: test-unit test-integration test-performance
+
+# 默認測試（不包含性能測試）
+test:
+	@echo "Running AutoGen test suite..."
+	$(PYTHON) -m pytest $(TEST_DIR) -v --tb=short --durations=10 -m "not performance and not benchmark"
+
+# 測試運行器
+test-runner:
+	@echo "🚀 使用測試運行器..."
+	$(PYTHON) $(TEST_DIR)/test_runner.py --suite all --verbose
+
+test-runner-unit:
+	@echo "🧪 使用測試運行器 - 單元測試..."
+	$(PYTHON) $(TEST_DIR)/test_runner.py --suite unit --verbose
+
+test-runner-integration:
+	@echo "🔗 使用測試運行器 - 集成測試..."
+	$(PYTHON) $(TEST_DIR)/test_runner.py --suite integration --verbose
+
+test-runner-performance:
+	@echo "🚀 使用測試運行器 - 性能測試..."
+	$(PYTHON) $(TEST_DIR)/test_runner.py --suite performance --verbose
+
+# 覆蓋率測試
+coverage:
+	@echo "Running coverage tests..."
+	$(PYTHON) -m pytest $(TEST_DIR) --cov=$(SOURCE_DIR) --cov-report=html --cov-report=term --cov-report=xml -m "not performance and not benchmark"
+	@echo "Coverage report generated in htmlcov/ directory"
+
+# 快速測試（簡化輸出）
+test-quick:
+	@echo "⚡ 快速測試..."
+	$(PYTHON) -m pytest $(TEST_DIR) -q --tb=line -x -m "not performance and not benchmark"
+
+# 測試特定文件
+test-file:
+	@echo "📄 測試指定文件: $(FILE)"
+	$(PYTHON) -m pytest $(FILE) -v --tb=short
+
+# 測試特定模式
+test-pattern:
+	@echo "🔍 測試匹配模式: $(PATTERN)"
+	$(PYTHON) -m pytest $(TEST_DIR) -k "$(PATTERN)" -v --tb=short
+
+# 並行測試
+test-parallel:
+	@echo "🔄 並行運行測試..."
+	$(PYTHON) -m pytest $(TEST_DIR) -n auto --tb=short -m "not performance and not benchmark"
+
+# 代碼檢查
+lint:
+	@echo "🔍 運行代碼檢查..."
+	@echo "檢查 src/autogen_system/..."
+	$(PYTHON) -m flake8 $(SOURCE_DIR) --max-line-length=100 --extend-ignore=E203,W503
+	@echo "檢查測試文件..."
+	$(PYTHON) -m flake8 $(TEST_DIR) --max-line-length=100 --extend-ignore=E203,W503
+
+# 代碼格式化
+format:
+	@echo "🎨 格式化代碼..."
+	$(PYTHON) -m black $(SOURCE_DIR) $(TEST_DIR) --line-length=100
+	$(PYTHON) -m isort $(SOURCE_DIR) $(TEST_DIR) --profile black
+
+# 類型檢查
+typecheck:
+	@echo "🔎 運行類型檢查..."
+	$(PYTHON) -m mypy $(SOURCE_DIR) --ignore-missing-imports
+
+# 清理測試文件
+clean:
+	@echo "🧹 清理測試文件..."
+	rm -rf $(REPORT_DIR)
+	rm -rf .pytest_cache
+	rm -rf htmlcov
+	rm -rf .coverage
+	rm -rf coverage.xml
+	find . -type d -name "__pycache__" -exec rm -rf {} +
+	find . -type f -name "*.pyc" -delete
+	find . -type f -name ".coverage.*" -delete
+
+# 創建測試報告目錄
+setup-reports:
+	@echo "📁 創建報告目錄..."
+	mkdir -p $(REPORT_DIR)
+
+# 完整的測試流程
+test-full: clean install-deps lint test coverage
+	@echo "✅ 完整測試流程完成"
+
+# 持續集成測試
+test-ci:
+	@echo "🏗️ 持續集成測試..."
+	$(PYTHON) -m pytest $(TEST_DIR) --tb=short --junit-xml=$(REPORT_DIR)/junit.xml --cov=$(SOURCE_DIR) --cov-report=xml -m "not performance and not benchmark"
+
+# 調試模式測試
+test-debug:
+	@echo "🐛 調試模式測試..."
+	$(PYTHON) -m pytest $(TEST_DIR) -v --tb=long --capture=no -s
+
+# 測試統計
+test-stats:
+	@echo "📈 測試統計..."
+	@echo "單元測試文件數："
+	@find $(TEST_DIR)/unit -name "test_*.py" | wc -l
+	@echo "集成測試文件數："
+	@find $(TEST_DIR)/integration -name "test_*.py" | wc -l
+	@echo "總測試文件數："
+	@find $(TEST_DIR) -name "test_*.py" | wc -l
+
+# 監視文件變化並自動測試
+test-watch:
+	@echo "👀 監視文件變化..."
+	$(PYTHON) -m ptw $(SOURCE_DIR) $(TEST_DIR) -- -v --tb=short -m "not performance and not benchmark"
+
+# 性能基準測試
+benchmark:
+	@echo "📊 運行性能基準測試..."
+	$(PYTHON) -m pytest $(TEST_DIR)/integration/test_performance.py::TestPerformanceBenchmarks -v --tb=short
+
+# 內存泄漏檢測
+test-memory:
+	@echo "🔍 內存泄漏檢測..."
+	$(PYTHON) -m pytest $(TEST_DIR)/integration/test_performance.py::TestPerformanceMetrics::test_memory_efficiency -v -s
+
+# 負載測試
+test-load:
+	@echo "⚡ 負載測試..."
+	$(PYTHON) -m pytest $(TEST_DIR)/integration/test_performance.py::TestPerformanceMetrics::test_load_testing -v -s
+
+# 顯示測試幫助
+test-help:
+	@echo "📚 測試命令幫助："
+	@echo ""
+	@echo "基本測試："
+	@echo "  make test              - 運行基本測試套件"
+	@echo "  make test-quick        - 快速測試（失敗時停止）"
+	@echo "  make test-debug        - 調試模式測試"
+	@echo ""
+	@echo "特定測試："
+	@echo "  make test-file FILE=path/to/test.py"
+	@echo "  make test-pattern PATTERN='test_name'"
+	@echo ""
+	@echo "性能測試："
+	@echo "  make benchmark         - 基準測試"
+	@echo "  make test-memory       - 內存測試"
+	@echo "  make test-load         - 負載測試"
+	@echo ""
+	@echo "工具："
+	@echo "  make coverage          - 覆蓋率報告"
+	@echo "  make lint             - 代碼檢查"
+	@echo "  make format           - 代碼格式化"
+	@echo ""
+
+# 預提交檢查
+pre-commit: lint typecheck test-quick
+	@echo "✅ 預提交檢查完成"
+
+# 發布前檢查
+pre-release: clean install-deps lint typecheck test-full
+	@echo "✅ 發布前檢查完成"
