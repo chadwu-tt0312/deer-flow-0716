@@ -25,6 +25,13 @@ init_logging()
 
 logger = get_logger(__name__)
 
+# 額外控制 watchfiles 的日誌級別，減少檔案監控的日誌輸出
+import logging
+
+watchfiles_logger = logging.getLogger("watchfiles")
+watchfiles_logger.setLevel(logging.WARNING)
+watchfiles_logger.propagate = False
+
 
 def get_server_config_from_env():
     """Extract host and port from NEXT_PUBLIC_API_URL environment variable."""
@@ -100,6 +107,10 @@ if __name__ == "__main__":
             port=args.port,
             reload=reload,
             log_level=args.log_level,
+            # 優化檔案監控設定，減少 watchfiles 日誌輸出
+            reload_dirs=["src"],  # 只監控源碼目錄
+            reload_excludes=["*.pyc", "*.log", "logs/*", "__pycache__/*"],  # 排除日誌檔案和快取
+            reload_includes=["*.py"],  # 只監控 Python 檔案
         )
     except Exception as e:
         logger.error(f"Failed to start server: {str(e)}")

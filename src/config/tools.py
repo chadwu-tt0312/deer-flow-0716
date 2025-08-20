@@ -3,9 +3,10 @@
 
 import os
 import enum
-from dotenv import load_dotenv
+# 移除 dotenv 導入以避免循環導入問題
+# from dotenv import load_dotenv
 
-load_dotenv()
+# load_dotenv()
 
 
 class SearchEngine(enum.Enum):

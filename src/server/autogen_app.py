@@ -75,7 +75,7 @@ async def chat_stream(request: ChatRequest):
 
     使用 AutoGen 系統處理聊天請求，但保持與原有 API 的相容性。
     """
-    logger.info("AutoGen Chat stream started", node="frontend")
+    logger.info("AutoGen Chat stream started")
 
     try:
         # 使用 AutoGen API 服務器處理請求
@@ -101,7 +101,7 @@ async def chat_stream_legacy(request: ChatRequest):
     if thread_id == "__default__":
         thread_id = str(uuid4())
 
-    logger.info("Legacy Chat stream started", node="frontend")
+    logger.info("Legacy Chat stream started")
 
     # 使用原有的 LangGraph 實現
     graph = build_graph_with_memory()

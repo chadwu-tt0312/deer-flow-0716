@@ -26,12 +26,30 @@ from src.llms.llm import get_llm_by_type
 from src.prompts.planner_model import Plan
 from src.prompts.template import apply_prompt_template
 from src.utils.json_utils import repair_json_output
-from src.logging import get_logger, set_thread_context
+from src.logging import get_logger, set_thread_context, setup_thread_logging
 
 from .types import State
 from ..config import SELECTED_SEARCH_ENGINE, SearchEngine
 
 logger = get_logger(__name__)
+
+
+def get_thread_id_from_config(config: RunnableConfig) -> str:
+    """
+    從 LangGraph config 中正確獲取 thread_id
+
+    Args:
+        config: LangGraph 的 RunnableConfig
+
+    Returns:
+        thread_id: 當前線程的 ID
+    """
+    # 從 config 中正確獲取 thread_id（LangGraph 標準方式）
+    thread_id = config.get("configurable", {}).get("thread_id")
+    if not thread_id:
+        # 備用方案：從根層級獲取（向後兼容）
+        thread_id = get_thread_id_from_config(config)
+    return thread_id
 
 
 @tool
@@ -47,10 +65,12 @@ def handoff_to_planner(
 
 def background_investigation_node(state: State, config: RunnableConfig):
     # 設定執行緒上下文
-    thread_id = config.get("thread_id", "default")
+    thread_id = get_thread_id_from_config(config)
+    # 使用新的 Thread-specific 日誌系統
+    thread_logger = setup_thread_logging(thread_id)
     set_thread_context(thread_id)
 
-    logger.info("background investigation node is running.")
+    thread_logger.info("background investigation node is running.")
     configurable = Configuration.from_runnable_config(config)
     query = state.get("research_topic")
     background_investigation_results = None
@@ -66,7 +86,7 @@ def background_investigation_node(state: State, config: RunnableConfig):
                 "background_investigation_results": "\n\n".join(background_investigation_results)
             }
         else:
-            logger.error(f"Tavily search returned malformed response: {searched_content}")
+            thread_logger.error(f"Tavily search returned malformed response: {searched_content}")
     else:
         background_investigation_results = get_web_search_tool(
             configurable.max_search_results
@@ -83,10 +103,12 @@ def planner_node(
 ) -> Command[Literal["human_feedback", "reporter"]]:
     """Planner node that generate the full plan."""
     # 設定執行緒上下文
-    thread_id = config.get("thread_id", "default")
+    thread_id = get_thread_id_from_config(config)
+    # 使用新的 Thread-specific 日誌系統
+    thread_logger = setup_thread_logging(thread_id)
     set_thread_context(thread_id)
 
-    logger.info("Planner generating full plan", node="planner")
+    thread_logger.info("Planner generating full plan")
     configurable = Configuration.from_runnable_config(config)
     plan_iterations = state["plan_iterations"] if state.get("plan_iterations", 0) else 0
     messages = apply_prompt_template("planner", state, configurable)
@@ -127,19 +149,19 @@ def planner_node(
         response = llm.stream(messages)
         for chunk in response:
             full_response += chunk.content
-    logger.debug(f"Current state messages: {state['messages']}")
-    logger.info(f"Planner response: {full_response}")
+    thread_logger.debug(f"Current state messages: {state['messages']}")
+    thread_logger.info(f"Planner response: {full_response}")
 
     try:
         curr_plan = json.loads(repair_json_output(full_response))
     except json.JSONDecodeError:
-        logger.warning("Planner response is not a valid JSON")
+        thread_logger.warning("Planner response is not a valid JSON")
         if plan_iterations > 0:
             return Command(goto="reporter")
         else:
             return Command(goto="__end__")
     if curr_plan.get("has_enough_context"):
-        logger.info("Planner response has enough context.")
+        thread_logger.info("Planner response has enough context.")
         new_plan = Plan.model_validate(curr_plan)
         return Command(
             update={
@@ -161,8 +183,11 @@ def human_feedback_node(
     state, config: RunnableConfig = None
 ) -> Command[Literal["planner", "research_team", "reporter", "__end__"]]:
     # 設定執行緒上下文
+    thread_logger = None
     if config:
-        thread_id = config.get("thread_id", "default")
+        thread_id = get_thread_id_from_config(config)
+        # 使用新的 Thread-specific 日誌系統
+        thread_logger = setup_thread_logging(thread_id)
         set_thread_context(thread_id)
 
     current_plan = state.get("current_plan", "")
@@ -182,7 +207,10 @@ def human_feedback_node(
                 goto="planner",
             )
         elif feedback and str(feedback).upper().startswith("[ACCEPTED]"):
-            logger.info("Plan is accepted by user.")
+            if thread_logger:
+                thread_logger.info("Plan is accepted by user.")
+            else:
+                logger.info("Plan is accepted by user.")
         else:
             raise TypeError(f"Interrupt value of {feedback} is not supported.")
 
@@ -196,7 +224,10 @@ def human_feedback_node(
         # parse the plan
         new_plan = json.loads(current_plan)
     except json.JSONDecodeError:
-        logger.warning("Planner response is not a valid JSON")
+        if thread_logger:
+            thread_logger.warning("Planner response is not a valid JSON")
+        else:
+            logger.warning("Planner response is not a valid JSON")
         if plan_iterations > 1:  # the plan_iterations is increased before this check
             return Command(goto="reporter")
         else:
@@ -217,10 +248,13 @@ def coordinator_node(
 ) -> Command[Literal["planner", "background_investigator", "__end__"]]:
     """Coordinator node that communicate with customers."""
     # 設定執行緒上下文
-    thread_id = config.get("thread_id", "default")
+    thread_id = get_thread_id_from_config(config)
+
+    # 使用新的 Thread-specific 日誌系統
+    thread_logger = setup_thread_logging(thread_id)
     set_thread_context(thread_id)
 
-    logger.info("Coordinator talking.", node="coordinator")
+    thread_logger.info("Coordinator talking.")
     configurable = Configuration.from_runnable_config(config)
     messages = apply_prompt_template("coordinator", state)
     response = (
@@ -228,7 +262,7 @@ def coordinator_node(
         .bind_tools([handoff_to_planner])
         .invoke(messages)
     )
-    logger.debug(f"Current state messages: {state['messages']}")
+    thread_logger.debug(f"Current state messages: {state['messages']}")
 
     goto = "__end__"
     locale = state.get("locale", "en-US")  # Default locale if not specified
@@ -250,12 +284,21 @@ def coordinator_node(
                     research_topic = tool_call.get("args", {}).get("research_topic")
                     break
         except Exception as e:
-            logger.error(f"Error processing tool calls: {e}")
+            if thread_logger:
+                thread_logger.error(f"Error processing tool calls: {e}")
+            else:
+                logger.error(f"Error processing tool calls: {e}")
     else:
-        logger.warning(
-            "Coordinator response contains no tool calls. Terminating workflow execution."
-        )
-        logger.debug(f"Coordinator response: {response}")
+        if thread_logger:
+            thread_logger.warning(
+                "Coordinator response contains no tool calls. Terminating workflow execution."
+            )
+            thread_logger.debug(f"Coordinator response: {response}")
+        else:
+            logger.warning(
+                "Coordinator response contains no tool calls. Terminating workflow execution."
+            )
+            logger.debug(f"Coordinator response: {response}")
 
     return Command(
         update={
@@ -270,10 +313,12 @@ def coordinator_node(
 def reporter_node(state: State, config: RunnableConfig):
     """Reporter node that write a final report."""
     # 設定執行緒上下文
-    thread_id = config.get("thread_id", "default")
+    thread_id = get_thread_id_from_config(config)
+    # 使用新的 Thread-specific 日誌系統
+    thread_logger = setup_thread_logging(thread_id)
     set_thread_context(thread_id)
 
-    logger.info("Reporter write final report")
+    thread_logger.info("Reporter write final report")
     configurable = Configuration.from_runnable_config(config)
     current_plan = state.get("current_plan")
     input_ = {
@@ -302,10 +347,10 @@ def reporter_node(state: State, config: RunnableConfig):
                 name="observation",
             )
         )
-    logger.debug(f"Current invoke messages: {invoke_messages}")
+    thread_logger.debug(f"Current invoke messages: {invoke_messages}")
     response = get_llm_by_type(AGENT_LLM_MAP["reporter"]).invoke(invoke_messages)
     response_content = response.content
-    logger.info(f"reporter response: {response_content}")
+    thread_logger.info(f"reporter response: {response_content}")
 
     return {"final_report": response_content}
 
@@ -313,11 +358,17 @@ def reporter_node(state: State, config: RunnableConfig):
 def research_team_node(state: State, config: RunnableConfig = None):
     """Research team node that collaborates on tasks."""
     # 設定執行緒上下文
+    thread_logger = None
     if config:
-        thread_id = config.get("thread_id", "default")
+        thread_id = get_thread_id_from_config(config)
+        # 使用新的 Thread-specific 日誌系統
+        thread_logger = setup_thread_logging(thread_id)
         set_thread_context(thread_id)
 
-    logger.info("Research team is collaborating on tasks.")
+    if thread_logger:
+        thread_logger.info("Research team is collaborating on tasks.")
+    else:
+        logger.info("Research team is collaborating on tasks.")
     pass
 
 
@@ -326,8 +377,11 @@ async def _execute_agent_step(
 ) -> Command[Literal["research_team"]]:
     """Helper function to execute a step using the specified agent."""
     # 設定執行緒上下文
+    thread_logger = None
     if config:
-        thread_id = config.get("thread_id", "default")
+        thread_id = get_thread_id_from_config(config)
+        # 使用新的 Thread-specific 日誌系統
+        thread_logger = setup_thread_logging(thread_id)
         set_thread_context(thread_id)
 
     current_plan = state.get("current_plan")
@@ -344,10 +398,16 @@ async def _execute_agent_step(
             completed_steps.append(step)
 
     if not current_step:
-        logger.warning("No unexecuted step found")
+        if thread_logger:
+            thread_logger.warning("No unexecuted step found")
+        else:
+            logger.warning("No unexecuted step found")
         return Command(goto="research_team")
 
-    logger.info(f"Executing step: {current_step.title}, agent: {agent_name}")
+    if thread_logger:
+        thread_logger.info(f"Executing step: {current_step.title}, agent: {agent_name}")
+    else:
+        logger.info(f"Executing step: {current_step.title}, agent: {agent_name}")
 
     # Format completed steps information
     completed_steps_info = ""
@@ -396,31 +456,55 @@ async def _execute_agent_step(
 
         if parsed_limit > 0:
             recursion_limit = parsed_limit
-            logger.info(f"Recursion limit set to: {recursion_limit}")
+            if thread_logger:
+                thread_logger.info(f"Recursion limit set to: {recursion_limit}")
+            else:
+                logger.info(f"Recursion limit set to: {recursion_limit}")
         else:
-            logger.warning(
-                f"AGENT_RECURSION_LIMIT value '{env_value_str}' (parsed as {parsed_limit}) is not positive. "
-                f"Using default value {default_recursion_limit}."
-            )
+            if thread_logger:
+                thread_logger.warning(
+                    f"AGENT_RECURSION_LIMIT value '{env_value_str}' (parsed as {parsed_limit}) is not positive. "
+                    f"Using default value {default_recursion_limit}."
+                )
+            else:
+                logger.warning(
+                    f"AGENT_RECURSION_LIMIT value '{env_value_str}' (parsed as {parsed_limit}) is not positive. "
+                    f"Using default value {default_recursion_limit}."
+                )
             recursion_limit = default_recursion_limit
     except ValueError:
         raw_env_value = os.getenv("AGENT_RECURSION_LIMIT")
-        logger.warning(
-            f"Invalid AGENT_RECURSION_LIMIT value: '{raw_env_value}'. "
-            f"Using default value {default_recursion_limit}."
-        )
+        if thread_logger:
+            thread_logger.warning(
+                f"Invalid AGENT_RECURSION_LIMIT value: '{raw_env_value}'. "
+                f"Using default value {default_recursion_limit}."
+            )
+        else:
+            logger.warning(
+                f"Invalid AGENT_RECURSION_LIMIT value: '{raw_env_value}'. "
+                f"Using default value {default_recursion_limit}."
+            )
         recursion_limit = default_recursion_limit
 
-    logger.info(f"Agent input: {agent_input}")
+    if thread_logger:
+        thread_logger.info(f"Agent input: {agent_input}")
+    else:
+        logger.info(f"Agent input: {agent_input}")
     result = await agent.ainvoke(input=agent_input, config={"recursion_limit": recursion_limit})
 
     # Process the result
     response_content = result["messages"][-1].content
-    logger.debug(f"{agent_name.capitalize()} full response: {response_content}")
+    if thread_logger:
+        thread_logger.debug(f"{agent_name.capitalize()} full response: {response_content}")
+    else:
+        logger.debug(f"{agent_name.capitalize()} full response: {response_content}")
 
     # Update the step with the execution result
     current_step.execution_res = response_content
-    logger.info(f"Step '{current_step.title}' execution completed by {agent_name}")
+    if thread_logger:
+        thread_logger.info(f"Step '{current_step.title}' execution completed by {agent_name}")
+    else:
+        logger.info(f"Step '{current_step.title}' execution completed by {agent_name}")
 
     return Command(
         update={
@@ -497,16 +581,18 @@ async def researcher_node(
 ) -> Command[Literal["research_team"]]:
     """Researcher node that do research"""
     # 設定執行緒上下文
-    thread_id = config.get("thread_id", "default")
+    thread_id = get_thread_id_from_config(config)
+    # 使用新的 Thread-specific 日誌系統
+    thread_logger = setup_thread_logging(thread_id)
     set_thread_context(thread_id)
 
-    logger.info("Researcher node is researching.", node="researcher")
+    thread_logger.info("Researcher node is researching.")
     configurable = Configuration.from_runnable_config(config)
     tools = [get_web_search_tool(configurable.max_search_results), crawl_tool]
     retriever_tool = get_retriever_tool(state.get("resources", []))
     if retriever_tool:
         tools.insert(0, retriever_tool)
-    logger.info(f"Researcher tools: {tools}")
+    thread_logger.info(f"Researcher tools: {tools}")
     return await _setup_and_execute_agent_step(
         state,
         config,
@@ -518,10 +604,12 @@ async def researcher_node(
 async def coder_node(state: State, config: RunnableConfig) -> Command[Literal["research_team"]]:
     """Coder node that do code analysis."""
     # 設定執行緒上下文
-    thread_id = config.get("thread_id", "default")
+    thread_id = get_thread_id_from_config(config)
+    # 使用新的 Thread-specific 日誌系統
+    thread_logger = setup_thread_logging(thread_id)
     set_thread_context(thread_id)
 
-    logger.info("Coder node is coding.", node="coder")
+    thread_logger.info("Coder node is coding.")
     return await _setup_and_execute_agent_step(
         state,
         config,

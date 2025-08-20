@@ -141,7 +141,7 @@ class HttpLogger:
 
     def _get_log_file(self, thread_id: Optional[str] = None) -> Path:
         """取得日誌檔案路徑"""
-        date_str = datetime.now().strftime("%Y%m%d")
+        date_str = datetime.now().strftime("%y%m%d")
 
         if thread_id and thread_id != "unknown" and thread_id != "default":
             # 只取前8碼來縮短檔名

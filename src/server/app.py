@@ -4,7 +4,7 @@
 import base64
 import json
 import os
-from typing import Annotated, List, cast
+from typing import Annotated, List, cast, Optional
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Query
@@ -40,7 +40,7 @@ from src.server.rag_request import (
     RAGResourcesResponse,
 )
 from src.tools import VolcengineTTS
-from src.logging import get_logger, set_thread_context
+from src.logging import get_logger, set_thread_context, clear_thread_context, setup_thread_logging
 
 logger = get_logger(__name__)
 
@@ -71,13 +71,13 @@ async def chat_stream(request: ChatRequest):
         thread_id = str(uuid4())
 
     # 記錄 API 呼叫（在 default.log 中）
-    logger.info("Chat stream started", node="frontend")
+    logger.info("Chat stream started")
 
     # 在 default.log 中記錄 thread 開始
-    from src.logging.context import clear_thread_context
+    # from src.logging.context import clear_thread_context
 
-    clear_thread_context()
-    logger.info(f"Thread [{thread_id}] started", node="system")
+    # clear_thread_context()
+    logger.info(f"Thread [{thread_id}] started")
 
     return StreamingResponse(
         _astream_workflow_generator(
@@ -113,7 +113,13 @@ async def _astream_workflow_generator(
     enable_deep_thinking: bool,
 ):
     # 設定執行緒上下文（所有後續日誌都會記錄到 thread-specific 檔案）
+    # 使用新的 Thread-specific 日誌系統
+    thread_logger = setup_thread_logging(thread_id)
     set_thread_context(thread_id)
+
+    # 記錄 thread 開始
+    thread_logger.info(f"開始處理新對話: {thread_id}")
+
     input_ = {
         "messages": messages,
         "plan_iterations": 0,
@@ -133,7 +139,9 @@ async def _astream_workflow_generator(
     async for agent, _, event_data in graph.astream(
         input_,
         config={
-            "thread_id": thread_id,
+            "configurable": {
+                "thread_id": thread_id,
+            },
             "resources": resources,
             "max_plan_iterations": max_plan_iterations,
             "max_step_num": max_step_num,
@@ -197,11 +205,10 @@ async def _astream_workflow_generator(
                 # AI Message - Raw message tokens
                 yield _make_event("message_chunk", event_stream_message)
 
-    # 在 default.log 中記錄 thread 結束
-    from src.logging.context import clear_thread_context
-
+    # 記錄 thread 結束
+    thread_logger.info(f"對話處理完成: {thread_id}")
     clear_thread_context()
-    logger.info(f"Thread [{thread_id}] completed", node="system")
+    logger.info(f"Thread [{thread_id}] completed")
 
 
 def _make_event(event_type: str, data: dict[str, any]):

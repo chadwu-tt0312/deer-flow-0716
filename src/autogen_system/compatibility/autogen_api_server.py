@@ -18,7 +18,7 @@ from src.config.report_style import ReportStyle
 from src.llms.llm import get_configured_llm_models
 from src.rag.retriever import Resource
 from src.server.chat_request import ChatRequest
-from src.logging import get_logger, set_thread_context, clear_thread_context
+from src.logging import get_logger, set_thread_context, clear_thread_context, setup_thread_logging
 
 from .api_adapter import AutoGenAPIAdapter
 from .langgraph_compatibility import LangGraphCompatibilityLayer
@@ -131,11 +131,11 @@ class AutoGenAPIServer:
             thread_id = str(uuid4())
 
         # 記錄 API 呼叫
-        logger.info("AutoGen Chat stream started", node="frontend")
+        logger.info("AutoGen Chat stream started")
 
         # 設置執行緒上下文
         clear_thread_context()
-        logger.info(f"Thread [{thread_id}] started", node="system")
+        logger.info(f"Thread [{thread_id}] started")
 
         return StreamingResponse(
             self._autogen_stream_generator(request, thread_id),
@@ -146,7 +146,12 @@ class AutoGenAPIServer:
         """AutoGen 流式生成器"""
         try:
             # 設定執行緒上下文
+            # 使用新的 Thread-specific 日誌系統
+            thread_logger = setup_thread_logging(thread_id)
             set_thread_context(thread_id)
+
+            # 記錄 thread 開始
+            thread_logger.info(f"開始處理 AutoGen 對話: {thread_id}")
 
             # 獲取 API 適配器
             adapter = self.get_api_adapter()
@@ -175,15 +180,20 @@ class AutoGenAPIServer:
                 yield sse_event
 
         except Exception as e:
-            logger.error(f"AutoGen 流式生成失敗: {e}")
+            if thread_logger:
+                thread_logger.error(f"AutoGen 流式生成失敗: {e}")
+            else:
+                logger.error(f"AutoGen 流式生成失敗: {e}")
             # 發送錯誤事件
             error_sse = StreamResponseMapper._create_error_sse(str(e))
             yield error_sse
 
         finally:
+            # 記錄 thread 結束
+            if thread_logger:
+                thread_logger.info(f"AutoGen 對話處理完成: {thread_id}")
             # 清理執行緒上下文
             clear_thread_context()
-            logger.info(f"Thread [{thread_id}] completed", node="system")
 
     async def handle_langgraph_compatibility(
         self, input_data: Dict[str, Any], config: Dict[str, Any] = None
