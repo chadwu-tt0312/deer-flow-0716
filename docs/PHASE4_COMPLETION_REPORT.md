@@ -211,14 +211,14 @@ uvicorn src.server.app:app --host 0.0.0.0 --port 8000
 ### 2. API端點
 - `/api/chat/stream` - AutoGen聊天流（新）
 - `/api/chat/stream/legacy` - LangGraph聊天流（舊）
-- `/api/autogen/status` - AutoGen系統狀態
-- `/api/autogen/workflow` - 直接工作流調用
-- `/api/autogen/compatibility` - 相容性測試
+- `/api/system/status` - 系統狀態檢查
+- `/api/system/workflow` - 工作流調用
+- `/api/system/compatibility` - 相容性測試
 
 ### 3. 健康檢查
 ```bash
-curl http://localhost:8000/health
-curl http://localhost:8000/api/autogen/status
+curl http://localhost:8001/health
+curl http://localhost:8001/api/system/status
 ```
 
 ## 對比原有系統

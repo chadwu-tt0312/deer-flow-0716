@@ -73,9 +73,41 @@ class AutoGenAPIServer:
         try:
             configured_models = get_configured_llm_models()
 
+            # 檢查 configured_models 的結構
+            if isinstance(configured_models, dict):
+                # 如果是字典，轉換為模型配置列表
+                model_configs = []
+                for llm_type, model_names in configured_models.items():
+                    if isinstance(model_names, list):
+                        for model_name in model_names:
+                            model_configs.append(
+                                {
+                                    "name": f"{llm_type}_{model_name}",
+                                    "model": model_name,
+                                    "type": llm_type,
+                                }
+                            )
+                    else:
+                        # 如果 model_names 不是列表，直接使用
+                        model_configs.append(
+                            {
+                                "name": f"{llm_type}_{model_names}",
+                                "model": model_names,
+                                "type": llm_type,
+                            }
+                        )
+            else:
+                # 如果已經是列表，直接使用
+                model_configs = configured_models
+
             # 為每個配置的模型創建客戶端
-            for model_config in configured_models:
-                model_name = model_config.get("name", "default")
+            for model_config in model_configs:
+                if isinstance(model_config, dict):
+                    model_name = model_config.get("name", "default")
+                    model_value = model_config.get("model", "gpt-4")
+                else:
+                    # 如果 model_config 不是字典，跳過
+                    continue
 
                 # 這裡應該根據實際的模型配置創建客戶端
                 # 暫時使用模擬的客戶端
@@ -83,14 +115,22 @@ class AutoGenAPIServer:
                     # 嘗試創建真實的客戶端
                     # 注意：這需要有效的 API 密鑰
                     client = OpenAIChatCompletionClient(
-                        model=model_config.get("model", "gpt-4"),
+                        model=model_value,
                         api_key="dummy-key",  # 實際部署時需要真實密鑰
                     )
                     self.model_clients[model_name] = client
 
                     # 創建對應的適配器和相容性層
-                    self.api_adapters[model_name] = AutoGenAPIAdapter(client)
-                    self.compatibility_layers[model_name] = LangGraphCompatibilityLayer(client)
+                    try:
+                        from .api_adapter import AutoGenAPIAdapter
+                        from .langgraph_compatibility import LangGraphCompatibilityLayer
+
+                        self.api_adapters[model_name] = AutoGenAPIAdapter(client)
+                        self.compatibility_layers[model_name] = LangGraphCompatibilityLayer(client)
+                        logger.info(f"成功創建模型 {model_name} 的適配器和相容性層")
+                    except Exception as e:
+                        logger.error(f"創建適配器失敗 {model_name}: {e}")
+                        # 即使適配器創建失敗，也要確保有預設的適配器
 
                 except Exception as e:
                     logger.warning(f"無法創建模型客戶端 {model_name}: {e}")
@@ -98,11 +138,72 @@ class AutoGenAPIServer:
         except Exception as e:
             logger.error(f"初始化模型客戶端失敗: {e}")
 
-            # 創建預設客戶端
-            default_client = OpenAIChatCompletionClient(model="gpt-4", api_key="dummy-key")
-            self.model_clients["default"] = default_client
-            self.api_adapters["default"] = AutoGenAPIAdapter(default_client)
-            self.compatibility_layers["default"] = LangGraphCompatibilityLayer(default_client)
+        # 確保至少有預設客戶端和適配器
+        if "default" not in self.model_clients:
+            try:
+                default_client = OpenAIChatCompletionClient(model="gpt-4", api_key="dummy-key")
+                self.model_clients["default"] = default_client
+                logger.info("創建預設模型客戶端")
+            except Exception as e:
+                logger.error(f"創建預設模型客戶端失敗: {e}")
+                # 創建一個最基本的模擬客戶端
+                self.model_clients["default"] = MockOpenAIChatCompletionClient()
+
+        if "default" not in self.api_adapters:
+            try:
+                from .api_adapter import AutoGenAPIAdapter
+
+                self.api_adapters["default"] = AutoGenAPIAdapter(self.model_clients["default"])
+                logger.info("創建預設 API 適配器")
+            except Exception as e:
+                logger.error(f"創建預設 API 適配器失敗: {e}")
+                # 創建一個最基本的模擬適配器
+                self.api_adapters["default"] = self._create_mock_adapter()
+
+        if "default" not in self.compatibility_layers:
+            try:
+                from .langgraph_compatibility import LangGraphCompatibilityLayer
+
+                self.compatibility_layers["default"] = LangGraphCompatibilityLayer(
+                    self.model_clients["default"]
+                )
+                logger.info("創建預設相容性層")
+            except Exception as e:
+                logger.error(f"創建預設相容性層失敗: {e}")
+                # 創建一個最基本的模擬相容性層
+                self.compatibility_layers["default"] = self._create_mock_compatibility_layer()
+
+        logger.info(
+            f"初始化完成 - 模型客戶端: {len(self.model_clients)}, 適配器: {len(self.api_adapters)}, 相容性層: {len(self.compatibility_layers)}"
+        )
+
+    def _create_mock_adapter(self):
+        """創建模擬適配器作為備用"""
+
+        class MockAdapter:
+            async def process_chat_request(self, messages, thread_id="default", **kwargs):
+                yield {
+                    "type": "error",
+                    "data": {
+                        "message": "AutoGen 系統暫時不可用，請檢查配置",
+                        "thread_id": thread_id,
+                        "timestamp": "2025-01-08T16:00:00Z",
+                    },
+                }
+
+        return MockAdapter()
+
+    def _create_mock_compatibility_layer(self):
+        """創建模擬相容性層作為備用"""
+
+        class MockCompatibilityLayer:
+            async def ainvoke(self, input_data, config=None):
+                return {
+                    "error": "AutoGen 相容性層暫時不可用，請檢查配置",
+                    "timestamp": "2025-01-08T16:00:00Z",
+                }
+
+        return MockCompatibilityLayer()
 
     def get_model_client(self, model_name: str = "default"):
         """獲取模型客戶端"""

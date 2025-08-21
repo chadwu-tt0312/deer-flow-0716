@@ -54,11 +54,19 @@ class DeerFlowLogger:
         config = self._get_logging_config()
 
         if config.is_file_provider():
-            # 移除直接導入以避免循環導入問題
-            # file_handler = DeerFlowFileHandler(config)
-            # file_handler.setFormatter(formatter)
-            # self.logger.addHandler(file_handler)
-            print("File handler is configured but DeerFlowFileHandler is not imported.")
+            try:
+                # 延遲導入以避免循環導入問題
+                from .handlers.file_handler import DeerFlowFileHandler
+
+                file_handler = DeerFlowFileHandler(config)
+                file_handler.setFormatter(formatter)
+                self.logger.addHandler(file_handler)
+            except ImportError as e:
+                print(f"⚠️ 無法導入 DeerFlowFileHandler: {e}")
+                print("📝 將使用控制台日誌輸出")
+            except Exception as e:
+                print(f"⚠️ 設定檔案處理器時發生錯誤: {e}")
+                print("📝 將使用控制台日誌輸出")
         elif config.is_database_provider():
             # 移除直接導入以避免循環導入問題
             # db_handler = DeerFlowDBHandler(config)

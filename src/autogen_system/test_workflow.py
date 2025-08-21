@@ -143,24 +143,58 @@ async def test_basic_workflow():
     # 測試完整的 WorkflowController
     print("\n🎯 測試 WorkflowController")
 
-    workflow_controller = WorkflowController(
-        config=workflow_config, agents=agents, use_ledger_orchestrator=True
-    )
+    workflow_controller = WorkflowController()
 
     try:
-        result = await workflow_controller.start_ledger_workflow(test_task)
-        print(f"✅ 工作流結果: {result['status']}")
-        print(f"📈 對話歷史長度: {len(result.get('conversation_history', []))}")
-        print(f"📋 Ledger 歷史長度: {len(result.get('ledger_history', []))}")
+        # 創建一個簡單的工作流計劃
+        from src.autogen_system.controllers.workflow_controller import (
+            WorkflowStep,
+            WorkflowPlan,
+            StepType,
+            ExecutionStatus,
+        )
 
-        # 顯示部分對話歷史
-        conversation_history = result.get("conversation_history", [])
-        if conversation_history:
-            print(f"\n💬 對話歷史摘要 (最後3條):")
-            for msg in conversation_history[-3:]:
-                sender = msg.get("sender", "Unknown")
-                content = msg.get("content", "")[:100]  # 截斷長內容
-                print(f"   [{sender}]: {content}...")
+        # 註冊步驟處理器
+        async def mock_step_handler(step: WorkflowStep, context: dict) -> dict:
+            """模擬步驟處理器"""
+            print(f"🔧 執行步驟: {step.name}")
+            # 模擬執行時間
+            import time
+
+            time.sleep(0.1)
+            return {"result": f"步驟 {step.name} 執行完成", "status": "success"}
+
+        workflow_controller.register_step_handler(StepType.RESEARCH, mock_step_handler)
+
+        # 創建測試步驟
+        test_steps = [
+            WorkflowStep(
+                id="test_step_1",
+                name="測試步驟1",
+                step_type=StepType.RESEARCH,
+                description="測試研究步驟",
+                agent_type="researcher",
+                inputs={"topic": test_task},
+                dependencies=[],
+                estimated_duration=5,
+            )
+        ]
+
+        # 創建測試計劃
+        test_plan = WorkflowPlan(
+            id="test_plan",
+            name="測試計劃",
+            description="用於測試的工作流計劃",
+            steps=test_steps,
+            estimated_duration=10,
+        )
+
+        # 執行計劃
+        result = await workflow_controller.execute_plan(test_plan, {"task": test_task})
+        print(f"✅ 工作流結果: {result.get('plan_status', 'unknown')}")
+        print(f"📈 計劃狀態: {result.get('plan_status', 'unknown')}")
+        print(f"📋 總步驟數: {result.get('total_steps', 0)}")
+        print(f"⏱️ 執行時間: {result.get('execution_time', 0):.2f} 秒")
 
     except Exception as e:
         print(f"❌ 工作流執行失敗: {e}")

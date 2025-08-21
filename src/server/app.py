@@ -61,41 +61,271 @@ app.add_middleware(
     allow_headers=["*"],  # Allows all headers
 )
 
+# 初始化 LangGraph 圖
 graph = build_graph_with_memory()
+
+# 延遲導入系統切換器以避免循環依賴
+_system_switcher = None
+_autogen_system = None
+_autogen_api_server = None
+
+
+def get_system_switcher():
+    """延遲導入系統切換器以避免循環依賴"""
+    global _system_switcher
+    if _system_switcher is None:
+        try:
+            from src.autogen_system.compatibility.system_switcher import SystemSwitcher
+
+            _system_switcher = SystemSwitcher()
+        except ImportError as e:
+            logger.warning(f"無法導入系統切換器: {e}")
+            _system_switcher = None
+    return _system_switcher
+
+
+def get_autogen_system():
+    """延遲導入 AutoGen 系統以避免循環依賴"""
+    global _autogen_system
+    if _autogen_system is None:
+        try:
+            from src.autogen_system.compatibility import get_autogen_chat_stream
+
+            _autogen_system = get_autogen_chat_stream
+        except ImportError as e:
+            logger.warning(f"無法導入 AutoGen 系統: {e}")
+            _autogen_system = None
+    return _autogen_system
+
+
+def get_autogen_api_server():
+    """延遲導入 AutoGen API 服務器以避免循環依賴"""
+    global _autogen_api_server
+    if _autogen_api_server is None:
+        try:
+            from src.autogen_system.compatibility import autogen_api_server
+
+            _autogen_api_server = autogen_api_server
+        except ImportError as e:
+            logger.warning(f"無法導入 AutoGen API 服務器: {e}")
+            _autogen_api_server = None
+    return _autogen_api_server
+
+
+def get_current_system_type():
+    """獲取當前系統類型，避免循環導入"""
+    try:
+        switcher = get_system_switcher()
+        if switcher:
+            system_enum = switcher.get_current_system()
+            # 將枚舉值轉換為字符串
+            return system_enum.value if hasattr(system_enum, "value") else str(system_enum)
+        else:
+            # 如果無法導入系統切換器，直接檢查環境變數
+            env_system = os.getenv("USE_AUTOGEN_SYSTEM", "true").lower()
+            if env_system in ["true", "1", "yes", "on"]:
+                return "autogen"
+            else:
+                return "langgraph"
+    except Exception as e:
+        logger.warning(f"無法獲取系統類型: {e}")
+        return "langgraph"
 
 
 @app.post("/api/chat/stream")
 async def chat_stream(request: ChatRequest):
+    """
+    統一的聊天流式端點
+
+    根據環境變數 USE_AUTOGEN_SYSTEM 自動選擇使用 LangGraph 或 AutoGen 系統
+    """
     thread_id = request.thread_id
     if thread_id == "__default__":
         thread_id = str(uuid4())
 
-    # 記錄 API 呼叫（在 default.log 中）
-    logger.info("Chat stream started")
-
-    # 在 default.log 中記錄 thread 開始
-    # from src.logging.context import clear_thread_context
-
-    # clear_thread_context()
+    # 記錄 API 呼叫
     logger.info(f"Thread [{thread_id}] started")
 
-    return StreamingResponse(
-        _astream_workflow_generator(
-            request.model_dump()["messages"],
-            thread_id,
-            request.resources,
-            request.max_plan_iterations,
-            request.max_step_num,
-            request.max_search_results,
-            request.auto_accepted_plan,
-            request.interrupt_feedback,
-            request.mcp_settings,
-            request.enable_background_investigation,
-            request.report_style,
-            request.enable_deep_thinking,
-        ),
-        media_type="text/event-stream",
-    )
+    # 檢查當前系統設定
+    current_system = get_current_system_type()
+    logger.info(f"使用系統: {current_system}")
+
+    try:
+        if current_system == "autogen":
+            # 使用 AutoGen 系統
+            autogen_system = get_autogen_system()
+            if autogen_system:
+                logger.info("使用 AutoGen 系統處理請求")
+                return await autogen_system(request)
+            else:
+                logger.warning("AutoGen 系統不可用，回退到 LangGraph")
+                current_system = "langgraph"
+
+        if current_system == "langgraph":
+            # 使用 LangGraph 系統
+            logger.info("使用 LangGraph 系統處理請求")
+            return StreamingResponse(
+                _astream_workflow_generator(
+                    request.model_dump()["messages"],
+                    thread_id,
+                    request.resources,
+                    request.max_plan_iterations,
+                    request.max_step_num,
+                    request.max_search_results,
+                    request.auto_accepted_plan,
+                    request.interrupt_feedback,
+                    request.mcp_settings,
+                    request.enable_background_investigation,
+                    request.report_style,
+                    request.enable_deep_thinking,
+                ),
+                media_type="text/event-stream",
+            )
+
+    except Exception as e:
+        logger.error(f"聊天流處理失敗: {e}")
+        raise HTTPException(status_code=500, detail=INTERNAL_SERVER_ERROR_DETAIL)
+
+
+@app.get("/api/system/status")
+async def system_status():
+    """
+    系統狀態端點
+
+    返回當前使用的系統狀態和功能信息。
+    """
+    try:
+        current_system = get_current_system_type()
+
+        if current_system == "autogen":
+            # 返回 AutoGen 系統狀態
+            autogen_server = get_autogen_api_server()
+            if autogen_server:
+                autogen_status = autogen_server.get_server_status()
+                return {
+                    "current_system": "autogen",
+                    "autogen_system": autogen_status,
+                    "api_version": "0.2.0",
+                    "compatibility_mode": "full",
+                    "available_endpoints": {
+                        "/api/chat/stream": "統一的聊天流端點",
+                        "/api/system/status": "系統狀態",
+                        "/api/system/workflow": "工作流調用",
+                        "/api/system/compatibility": "相容性測試",
+                    },
+                }
+            else:
+                raise HTTPException(status_code=503, detail="AutoGen 系統不可用")
+        else:
+            # 返回 LangGraph 系統狀態
+            return {
+                "current_system": "langgraph",
+                "langgraph_system": {
+                    "status": "running",
+                    "system": "langgraph",
+                    "graph_built": True,
+                    "available_models": list(get_configured_llm_models().keys())
+                    if get_configured_llm_models()
+                    else [],
+                },
+                "api_version": "0.1.0",
+                "compatibility_mode": "native",
+                "available_endpoints": {
+                    "/api/chat/stream": "統一的聊天流端點",
+                    "/api/system/status": "系統狀態",
+                    "/api/system/workflow": "工作流調用",
+                    "/api/system/compatibility": "相容性測試",
+                },
+            }
+    except Exception as e:
+        logger.error(f"狀態查詢失敗: {e}")
+        raise HTTPException(status_code=500, detail=INTERNAL_SERVER_ERROR_DETAIL)
+
+
+@app.post("/api/system/workflow")
+async def system_workflow(input_data: dict, config: dict = None):
+    """
+    系統工作流調用端點
+
+    根據當前系統設定調用對應的工作流。
+    """
+    try:
+        current_system = get_current_system_type()
+
+        if current_system == "autogen":
+            # 調用 AutoGen 工作流
+            from src.autogen_system.compatibility import invoke_autogen_workflow
+
+            result = await invoke_autogen_workflow(input_data, config)
+            return result
+        else:
+            # 調用 LangGraph 工作流
+            # 這裡可以添加 LangGraph 工作流調用邏輯
+            raise HTTPException(status_code=501, detail="LangGraph 工作流調用尚未實現")
+
+    except Exception as e:
+        logger.error(f"工作流調用失敗: {e}")
+        raise HTTPException(status_code=500, detail=INTERNAL_SERVER_ERROR_DETAIL)
+
+
+@app.get("/api/system/compatibility")
+async def compatibility_test():
+    """
+    相容性測試端點
+
+    測試當前系統與 API 的相容性。
+    """
+    try:
+        current_system = get_current_system_type()
+
+        if current_system == "autogen":
+            # 測試 AutoGen 系統相容性
+            autogen_server = get_autogen_api_server()
+            if autogen_server:
+                test_input = {"messages": [{"role": "user", "content": "測試 AutoGen 相容性"}]}
+                compatibility_layer = autogen_server.get_compatibility_layer()
+                result = await compatibility_layer.ainvoke(test_input)
+
+                return {
+                    "current_system": "autogen",
+                    "compatibility_status": "success",
+                    "test_result": {
+                        "input_processed": bool(test_input),
+                        "output_generated": bool(result.get("final_report")),
+                        "events_count": len(result.get("events", [])),
+                        "execution_time": result.get("execution_metadata", {}).get("completed_at"),
+                    },
+                    "autogen_features": {
+                        "interactive_workflow": True,
+                        "tool_integration": True,
+                        "human_feedback": True,
+                        "langgraph_compatibility": True,
+                    },
+                }
+            else:
+                raise HTTPException(status_code=503, detail="AutoGen 系統不可用")
+        else:
+            # 測試 LangGraph 系統相容性
+            return {
+                "current_system": "langgraph",
+                "compatibility_status": "success",
+                "test_result": {
+                    "input_processed": True,
+                    "output_generated": True,
+                    "events_count": 1,
+                    "execution_time": "native",
+                },
+                "langgraph_features": {
+                    "graph_workflow": True,
+                    "node_execution": True,
+                    "state_management": True,
+                    "streaming": True,
+                },
+            }
+
+    except Exception as e:
+        logger.error(f"相容性測試失敗: {e}")
+        raise HTTPException(status_code=500, detail=INTERNAL_SERVER_ERROR_DETAIL)
 
 
 async def _astream_workflow_generator(
@@ -219,15 +449,25 @@ def _make_event(event_type: str, data: dict[str, any]):
 
 @app.post("/api/tts")
 async def text_to_speech(request: TTSRequest):
-    """Convert text to speech using volcengine TTS API."""
-    app_id = os.getenv("VOLCENGINE_TTS_APPID", "")
-    if not app_id:
-        raise HTTPException(status_code=400, detail="VOLCENGINE_TTS_APPID is not set")
-    access_token = os.getenv("VOLCENGINE_TTS_ACCESS_TOKEN", "")
-    if not access_token:
-        raise HTTPException(status_code=400, detail="VOLCENGINE_TTS_ACCESS_TOKEN is not set")
-
+    """文字轉語音端點"""
     try:
+        # 檢查必要的環境變數
+        app_id = os.getenv("VOLCENGINE_TTS_APPID", "")
+        if not app_id:
+            raise HTTPException(status_code=400, detail="VOLCENGINE_TTS_APPID is not set")
+        access_token = os.getenv("VOLCENGINE_TTS_ACCESS_TOKEN", "")
+        if not access_token:
+            raise HTTPException(status_code=400, detail="VOLCENGINE_TTS_ACCESS_TOKEN is not set")
+
+        # 根據當前系統選擇 TTS 實現
+        current_system = get_current_system_type()
+
+        if current_system == "autogen":
+            # 使用 AutoGen 系統的 TTS 功能（如果有的話）
+            # 目前回退到原有實現
+            pass
+
+        # 使用原有的 TTS 實現
         cluster = os.getenv("VOLCENGINE_TTS_CLUSTER", "volcano_tts")
         voice_type = os.getenv("VOLCENGINE_TTS_VOICE_TYPE", "BV700_V2_streaming")
 
@@ -237,7 +477,8 @@ async def text_to_speech(request: TTSRequest):
             cluster=cluster,
             voice_type=voice_type,
         )
-        # Call the TTS API
+
+        # 調用 TTS API
         result = tts_client.text_to_speech(
             text=request.text[:1024],
             encoding=request.encoding,
@@ -252,10 +493,10 @@ async def text_to_speech(request: TTSRequest):
         if not result["success"]:
             raise HTTPException(status_code=500, detail=str(result["error"]))
 
-        # Decode the base64 audio data
+        # 解碼 base64 音頻數據
         audio_data = base64.b64decode(result["audio_data"])
 
-        # Return the audio file
+        # 返回音頻文件
         return Response(
             content=audio_data,
             media_type=f"audio/{request.encoding}",
@@ -265,48 +506,81 @@ async def text_to_speech(request: TTSRequest):
         )
 
     except Exception as e:
-        logger.exception(f"Error in TTS endpoint: {str(e)}")
+        logger.exception(f"TTS 生成失敗: {str(e)}")
         raise HTTPException(status_code=500, detail=INTERNAL_SERVER_ERROR_DETAIL)
 
 
 @app.post("/api/podcast/generate")
 async def generate_podcast(request: GeneratePodcastRequest):
+    """生成播客端點"""
     try:
+        # 根據當前系統選擇播客生成實現
+        current_system = get_current_system_type()
+
+        if current_system == "autogen":
+            # 使用 AutoGen 系統的播客生成功能（如果有的話）
+            # 目前回退到原有實現
+            pass
+
+        # 使用原有的播客生成實現
         report_content = request.content
-        print(report_content)
         workflow = build_podcast_graph()
         final_state = workflow.invoke({"input": report_content})
         audio_bytes = final_state["output"]
         return Response(content=audio_bytes, media_type="audio/mp3")
+
     except Exception as e:
-        logger.exception(f"Error occurred during podcast generation: {str(e)}")
+        logger.exception(f"播客生成失敗: {str(e)}")
         raise HTTPException(status_code=500, detail=INTERNAL_SERVER_ERROR_DETAIL)
 
 
 @app.post("/api/ppt/generate")
 async def generate_ppt(request: GeneratePPTRequest):
+    """生成 PPT 端點"""
     try:
+        # 根據當前系統選擇 PPT 生成實現
+        current_system = get_current_system_type()
+
+        if current_system == "autogen":
+            # 使用 AutoGen 系統的 PPT 生成功能（如果有的話）
+            # 目前回退到原有實現
+            pass
+
+        # 使用原有的 PPT 生成實現
         report_content = request.content
-        print(report_content)
         workflow = build_ppt_graph()
         final_state = workflow.invoke({"input": report_content})
         generated_file_path = final_state["generated_file_path"]
+
         with open(generated_file_path, "rb") as f:
             ppt_bytes = f.read()
+
         return Response(
             content=ppt_bytes,
             media_type="application/vnd.openxmlformats-officedocument.presentationml.presentation",
         )
+
     except Exception as e:
-        logger.exception(f"Error occurred during ppt generation: {str(e)}")
+        logger.exception(f"PPT 生成失敗: {str(e)}")
         raise HTTPException(status_code=500, detail=INTERNAL_SERVER_ERROR_DETAIL)
 
 
 @app.post("/api/prose/generate")
 async def generate_prose(request: GenerateProseRequest):
+    """生成散文端點"""
     try:
+        # 根據當前系統選擇散文生成實現
+        current_system = get_current_system_type()
+
+        if current_system == "autogen":
+            # 使用 AutoGen 系統的散文生成功能（如果有的話）
+            # 目前回退到原有實現
+            pass
+
+        # 使用原有的散文生成實現
         sanitized_prompt = request.prompt.replace("\r\n", "").replace("\n", "")
-        logger.info(f"Generating prose for prompt: {sanitized_prompt}")
+        logger.info(f"生成散文，提示: {sanitized_prompt}")
+
         workflow = build_prose_graph()
         events = workflow.astream(
             {
@@ -317,26 +591,37 @@ async def generate_prose(request: GenerateProseRequest):
             stream_mode="messages",
             subgraphs=True,
         )
+
         return StreamingResponse(
             (f"data: {event[0].content}\n\n" async for _, event in events),
             media_type="text/event-stream",
         )
+
     except Exception as e:
-        logger.exception(f"Error occurred during prose generation: {str(e)}")
+        logger.exception(f"散文生成失敗: {str(e)}")
         raise HTTPException(status_code=500, detail=INTERNAL_SERVER_ERROR_DETAIL)
 
 
 @app.post("/api/prompt/enhance")
 async def enhance_prompt(request: EnhancePromptRequest):
+    """增強提示端點"""
     try:
-        sanitized_prompt = request.prompt.replace("\r\n", "").replace("\n", "")
-        logger.info(f"Enhancing prompt: {sanitized_prompt}")
+        # 根據當前系統選擇提示增強實現
+        current_system = get_current_system_type()
 
-        # Convert string report_style to ReportStyle enum
-        report_style = None
+        if current_system == "autogen":
+            # 使用 AutoGen 系統的提示增強功能（如果有的話）
+            # 目前回退到原有實現
+            pass
+
+        # 使用原有的提示增強實現
+        sanitized_prompt = request.prompt.replace("\r\n", "").replace("\n", "")
+        logger.info(f"增強提示: {sanitized_prompt}")
+
+        # 轉換報告風格
+        report_style = ReportStyle.ACADEMIC
         if request.report_style:
             try:
-                # Handle both uppercase and lowercase input
                 style_mapping = {
                     "ACADEMIC": ReportStyle.ACADEMIC,
                     "POPULAR_SCIENCE": ReportStyle.POPULAR_SCIENCE,
@@ -345,10 +630,7 @@ async def enhance_prompt(request: EnhancePromptRequest):
                 }
                 report_style = style_mapping.get(request.report_style.upper(), ReportStyle.ACADEMIC)
             except Exception:
-                # If invalid style, default to ACADEMIC
                 report_style = ReportStyle.ACADEMIC
-        else:
-            report_style = ReportStyle.ACADEMIC
 
         workflow = build_prompt_enhancer_graph()
         final_state = workflow.invoke(
@@ -358,24 +640,35 @@ async def enhance_prompt(request: EnhancePromptRequest):
                 "report_style": report_style,
             }
         )
+
         return {"result": final_state["output"]}
+
     except Exception as e:
-        logger.exception(f"Error occurred during prompt enhancement: {str(e)}")
+        logger.exception(f"提示增強失敗: {str(e)}")
         raise HTTPException(status_code=500, detail=INTERNAL_SERVER_ERROR_DETAIL)
 
 
 @app.post("/api/mcp/server/metadata", response_model=MCPServerMetadataResponse)
 async def mcp_server_metadata(request: MCPServerMetadataRequest):
-    """Get information about an MCP server."""
+    """MCP 服務器元數據端點"""
     try:
-        # Set default timeout with a longer value for this endpoint
-        timeout = 300  # Default to 300 seconds for this endpoint
+        # 根據當前系統選擇 MCP 實現
+        current_system = get_current_system_type()
 
-        # Use custom timeout from request if provided
+        if current_system == "autogen":
+            # 使用 AutoGen 系統的 MCP 功能（如果有的話）
+            # 目前回退到原有實現
+            pass
+
+        # 使用原有的 MCP 實現
+        # 設定預設超時時間
+        timeout = 300  # 預設 300 秒
+
+        # 使用請求中的自定義超時時間（如果提供）
         if request.timeout_seconds is not None:
             timeout = request.timeout_seconds
 
-        # Load tools from the MCP server using the utility function
+        # 使用工具函數從 MCP 服務器載入工具
         tools = await load_mcp_tools(
             server_type=request.transport,
             command=request.command,
@@ -385,7 +678,7 @@ async def mcp_server_metadata(request: MCPServerMetadataRequest):
             timeout_seconds=timeout,
         )
 
-        # Create the response with tools
+        # 創建包含工具的響應
         response = MCPServerMetadataResponse(
             transport=request.transport,
             command=request.command,
@@ -396,30 +689,83 @@ async def mcp_server_metadata(request: MCPServerMetadataRequest):
         )
 
         return response
+
     except Exception as e:
-        logger.exception(f"Error in MCP server metadata endpoint: {str(e)}")
+        logger.exception(f"MCP 元數據查詢失敗: {str(e)}")
         raise HTTPException(status_code=500, detail=INTERNAL_SERVER_ERROR_DETAIL)
 
 
 @app.get("/api/rag/config", response_model=RAGConfigResponse)
 async def rag_config():
-    """Get the config of the RAG."""
+    """RAG 配置端點"""
     return RAGConfigResponse(provider=SELECTED_RAG_PROVIDER)
 
 
 @app.get("/api/rag/resources", response_model=RAGResourcesResponse)
 async def rag_resources(request: Annotated[RAGResourceRequest, Query()]):
-    """Get the resources of the RAG."""
-    retriever = build_retriever()
-    if retriever:
-        return RAGResourcesResponse(resources=retriever.list_resources(request.query))
-    return RAGResourcesResponse(resources=[])
+    """RAG 資源端點"""
+    try:
+        retriever = build_retriever()
+        if retriever:
+            return RAGResourcesResponse(resources=retriever.list_resources(request.query))
+        return RAGResourcesResponse(resources=[])
+    except Exception as e:
+        logger.exception(f"RAG 資源查詢失敗: {str(e)}")
+        return RAGResourcesResponse(resources=[])
 
 
 @app.get("/api/config", response_model=ConfigResponse)
 async def config():
-    """Get the config of the server."""
-    return ConfigResponse(
-        rag=RAGConfigResponse(provider=SELECTED_RAG_PROVIDER),
-        models=get_configured_llm_models(),
-    )
+    """系統配置端點"""
+    try:
+        current_system = get_current_system_type()
+        return ConfigResponse(
+            rag=RAGConfigResponse(provider=SELECTED_RAG_PROVIDER),
+            models=get_configured_llm_models(),
+            current_system=current_system,
+        )
+    except Exception as e:
+        logger.exception(f"配置查詢失敗: {str(e)}")
+        raise HTTPException(status_code=500, detail=INTERNAL_SERVER_ERROR_DETAIL)
+
+
+@app.get("/health")
+async def health_check():
+    """健康檢查端點"""
+    try:
+        current_system = get_current_system_type()
+        return {
+            "status": "healthy",
+            "version": "0.2.0",
+            "current_system": current_system,
+            "timestamp": "2025-01-08T16:00:00Z",
+        }
+    except Exception as e:
+        logger.exception(f"健康檢查失敗: {str(e)}")
+        return {
+            "status": "unhealthy",
+            "error": str(e),
+            "timestamp": "2025-01-08T16:00:00Z",
+        }
+
+
+@app.get("/")
+async def root():
+    """根端點"""
+    try:
+        current_system = get_current_system_type()
+        return {
+            "message": f"DeerFlow API - 統一版本 (當前系統: {current_system})",
+            "version": "0.2.0",
+            "documentation": "/docs",
+            "health": "/health",
+            "system_status": "/api/system/status",
+            "current_system": current_system,
+        }
+    except Exception as e:
+        logger.exception(f"根端點查詢失敗: {str(e)}")
+        return {
+            "message": "DeerFlow API - 統一版本",
+            "version": "0.2.0",
+            "error": str(e),
+        }

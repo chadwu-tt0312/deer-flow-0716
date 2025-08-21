@@ -42,7 +42,7 @@ export OPENAI_API_KEY="your-api-key"
 python -m src.server.autogen_app
 
 # 5. 測試運行
-curl http://localhost:8000/api/autogen/status
+curl http://localhost:8001/api/system/status
 ```
 
 ## 🎯 核心功能
@@ -270,13 +270,13 @@ make test-memory
 
 ```bash
 # 系統狀態
-GET /api/autogen/status
+GET /api/system/status
 
 # 聊天對話
 POST /api/chat/stream
 
 # 工作流執行
-POST /api/autogen/workflow
+POST /api/system/workflow
 
 # 文本處理
 POST /api/prose/generate
@@ -441,7 +441,7 @@ git commit -m "test: 添加集成測試用例"
 - 📖 **文檔**: 查看 `docs/` 目錄
 - 💻 **示例**: 參考 `examples/` 目錄
 - 🧪 **測試**: 運行 `make test-all`
-- 📊 **監控**: 訪問 `/api/autogen/status`
+- 📊 **監控**: 訪問 `/api/system/status`
 
 ### 🐛 問題報告
 

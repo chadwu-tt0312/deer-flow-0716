@@ -117,11 +117,34 @@ security:
   max_file_size_mb: 10
 
 # 記錄設定
-logging:
+LOGGING:
+  # 提供者選項：file, sqlite://path/to/db.sqlite, postgresql://user:pass@host:port/dbname
+  provider: "file"
+
+  # 日誌級別設定
   level: "INFO"
+
+  # 輸出設定
+  console_output: true
+
+  # 檔案設定
+  file_settings:
+    log_dir: "logs"
+    max_days: 10
+    compress_old_files: true
+
+  # 外部套件日誌設定
+  external_loggers:
+    level: "ERROR"
+
+  # 日誌格式設定
+  format:
+    main: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    thread: "%(asctime)s - %(levelname)s - %(message)s"
+
+  # 特定功能日誌
   conversation_log: true
   agent_actions_log: true
-  log_file: "logs/autogen.log"
 
 # 效能設定
 performance:

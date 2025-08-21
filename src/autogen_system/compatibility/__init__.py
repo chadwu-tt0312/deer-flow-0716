@@ -21,6 +21,17 @@ from .autogen_api_server import (
     invoke_autogen_workflow,
     stream_autogen_workflow,
 )
+from .system_switcher import (
+    SystemSwitcher,
+    SystemType,
+    global_system_switcher,
+    run_workflow_with_auto_switch,
+    get_current_system,
+    switch_to_autogen,
+    switch_to_langgraph,
+    system_health_check,
+    get_system_performance_stats,
+)
 from .test_compatibility import (
     CompatibilityTester,
     run_compatibility_tests,
@@ -43,6 +54,16 @@ __all__ = [
     "get_autogen_chat_stream",
     "invoke_autogen_workflow",
     "stream_autogen_workflow",
+    # 系統切換器
+    "SystemSwitcher",
+    "SystemType",
+    "global_system_switcher",
+    "run_workflow_with_auto_switch",
+    "get_current_system",
+    "switch_to_autogen",
+    "switch_to_langgraph",
+    "system_health_check",
+    "get_system_performance_stats",
     # 測試工具
     "CompatibilityTester",
     "run_compatibility_tests",

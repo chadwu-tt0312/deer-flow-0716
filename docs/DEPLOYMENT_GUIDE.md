@@ -143,7 +143,7 @@ python -m src.server.autogen_app
 uvicorn src.server.autogen_app:app --host 0.0.0.0 --port 8000 --reload
 
 # 服務啟動後訪問
-curl http://localhost:8000/api/autogen/status
+curl http://localhost:8001/api/system/status
 ```
 
 ## 🏢 生產環境部署
@@ -355,7 +355,7 @@ server {
     
     # 健康檢查
     location /health {
-        proxy_pass http://127.0.0.1:8000/api/autogen/status;
+        proxy_pass http://127.0.0.1:8001/api/system/status;
         access_log off;
     }
 }
@@ -470,7 +470,7 @@ EXPOSE 8000
 
 # 健康檢查
 HEALTHCHECK --interval=30s --timeout=30s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:8000/api/autogen/status || exit 1
+    CMD curl -f http://localhost:8001/api/system/status || exit 1
 
 # 啟動命令
 CMD ["uvicorn", "src.server.autogen_app:app", "--host", "0.0.0.0", "--port", "8000"]
@@ -566,7 +566,7 @@ global:
 scrape_configs:
   - job_name: 'autogen'
     static_configs:
-      - targets: ['localhost:8000']
+      - targets: ['localhost:8001']
     metrics_path: '/metrics'
 ```
 
@@ -606,7 +606,7 @@ scrape_configs:
 # AutoGen系統健康檢查
 
 # 配置
-API_URL="http://localhost:8000/api/autogen/status"
+API_URL="http://localhost:8001/api/system/status"
 LOG_FILE="/var/log/autogen/health_check.log"
 MAX_RESPONSE_TIME=10
 
@@ -784,7 +784,7 @@ free -h
 
 # 檢查網絡連接
 echo -e "\n🌍 網絡測試:"
-curl -s -o /dev/null -w "API響應時間: %{time_total}s\n" http://localhost:8000/api/autogen/status
+curl -s -o /dev/null -w "API響應時間: %{time_total}s\n" http://localhost:8001/api/system/status
 ```
 
 ## 🔐 安全配置
@@ -868,7 +868,7 @@ security:
 make deploy-check
 
 # 或手動檢查
-curl -f http://localhost:8000/api/autogen/status
+curl -f http://localhost:8001/api/system/status
 python tests/autogen_system/performance_demo_standalone.py
 make test-integration
 ```
@@ -878,7 +878,7 @@ make test-integration
 - **文檔**: 查看 `docs/` 目錄
 - **示例**: 參考 `examples/` 目錄  
 - **測試**: 運行 `make test-all`
-- **監控**: 訪問 `/api/autogen/status`
+- **監控**: 訪問 `/api/system/status`
 
 ---
 

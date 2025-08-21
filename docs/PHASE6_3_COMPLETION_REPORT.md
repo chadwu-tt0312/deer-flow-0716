@@ -165,7 +165,7 @@ export OPENAI_API_KEY="your-api-key"
 python -m src.server.autogen_app
 
 # 5. 測試運行
-curl http://localhost:8000/api/autogen/status
+curl http://localhost:8001/api/system/status
 ```
 
 #### 📝 使用示例
@@ -220,9 +220,9 @@ python tests/autogen_system/performance_demo_standalone.py
 
 | 端點 | 方法 | 功能 | 狀態 |
 |------|------|------|------|
-| `/api/autogen/status` | GET | 系統狀態檢查 | ✅ |
+| `/api/system/status` | GET | 系統狀態檢查 | ✅ |
 | `/api/chat/stream` | POST | AutoGen聊天流 | ✅ |
-| `/api/autogen/workflow` | POST | 工作流執行 | ✅ |
+| `/api/system/workflow` | POST | 工作流執行 | ✅ |
 | `/api/prose/generate` | POST | 文本處理 | ✅ |
 | `/api/prompt/enhance` | POST | 提示增強 | ✅ |
 
