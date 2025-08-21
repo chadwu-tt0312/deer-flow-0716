@@ -104,13 +104,6 @@ tools:
       args: ["mcp-github-trending"]
       enabled_tools: ["get_github_trending_repositories"]
 
-# 安全設定
-security:
-  enable_code_execution: true
-  sandbox_mode: true
-  allowed_file_extensions: [".py", ".txt", ".md", ".json", ".csv"]
-  max_file_size_mb: 10
-
 # 記錄設定
 logging:
   level: "INFO"
@@ -118,6 +111,13 @@ logging:
   agent_actions_log: true
   log_file: "logs/autogen.log"
 
+# 安全設定
+security:
+  enable_code_execution: true
+  sandbox_mode: true
+  allowed_file_extensions: [".py", ".txt", ".md", ".json", ".csv"]
+  max_file_size_mb: 10
+  
 # 效能設定
 performance:
   parallel_execution: false  # 暫時關閉，等穩定後開啟

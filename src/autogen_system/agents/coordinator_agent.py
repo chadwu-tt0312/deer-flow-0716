@@ -14,6 +14,9 @@ from datetime import datetime
 from .base_agent import BaseResearchAgent, UserProxyResearchAgent
 from ..config.agent_config import AgentConfig, AgentRole
 from src.logging import get_logger
+from src.llms.llm import get_llm_by_type
+from langchain.schema import HumanMessage, SystemMessage
+from src.config.agents import AGENT_LLM_MAP
 
 logger = get_logger(__name__)
 
@@ -100,7 +103,7 @@ class CoordinatorAgent(UserProxyResearchAgent):
         """設定協調者專用的工具"""
 
         # 添加 handoff_to_planner 工具的模擬版本
-        def handoff_to_planner(research_topic: str, locale: str = "zh-CN"):
+        def handoff_to_planner(research_topic: str, locale: str = "zh-TW"):
             """交給計劃者的工具"""
             logger.info(f"協調者將任務交給計劃者: {research_topic} (語言: {locale})")
             return {
@@ -193,29 +196,84 @@ class CoordinatorAgent(UserProxyResearchAgent):
         Returns:
             Dict[str, Any]: 處理結果
         """
-        analysis = self.analyze_user_input(user_input)
+        try:
+            logger.info(f"協調者智能體開始處理用戶輸入: {user_input}")
 
-        if analysis["request_type"] == "greeting":
-            return {
-                "response_type": "direct",
-                "response": self._generate_greeting_response(analysis["locale"]),
-                "next_action": None,
-            }
+            analysis = self.analyze_user_input(user_input)
 
-        elif analysis["request_type"] == "harmful":
-            return {
-                "response_type": "direct",
-                "response": self._generate_rejection_response(analysis["locale"]),
-                "next_action": None,
-            }
+            if analysis["request_type"] == "greeting":
+                response = self._generate_greeting_response(analysis["locale"])
+                logger.info("生成問候回應")
+                return {
+                    "response_type": "direct",
+                    "response": response,
+                    "next_action": None,
+                }
 
-        else:  # research
+            elif analysis["request_type"] == "harmful":
+                response = self._generate_rejection_response(analysis["locale"])
+                logger.info("生成拒絕回應")
+                return {
+                    "response_type": "direct",
+                    "response": response,
+                    "next_action": None,
+                }
+
+            else:  # research
+                # 使用 LLM 生成協調回應
+                if hasattr(self, "llm_config") and self.llm_config:
+                    try:
+                        logger.info("嘗試調用 LLM API 生成協調回應...")
+
+                        # 調用 LLM 生成協調分析
+                        coordination_response = await self._generate_coordination_response(
+                            user_input, analysis
+                        )
+
+                        logger.info("LLM 調用成功，生成協調回應")
+
+                        return {
+                            "response_type": "coordination",
+                            "response": coordination_response,
+                            "next_action": "planner",
+                            "research_topic": analysis["research_topic"],
+                            "locale": analysis["locale"],
+                        }
+
+                    except Exception as e:
+                        logger.warning(f"LLM 調用失敗，使用預設回應: {e}")
+                        # 降級到預設邏輯
+                        response = self._generate_default_coordination_response(
+                            analysis["research_topic"], analysis["locale"]
+                        )
+                        return {
+                            "response_type": "coordination",
+                            "response": response,
+                            "next_action": "planner",
+                            "research_topic": analysis["research_topic"],
+                            "locale": analysis["locale"],
+                        }
+                else:
+                    logger.warning("沒有 LLM 配置，使用預設邏輯")
+                    logger.info("info_沒有 LLM 配置，使用預設邏輯")
+                    # 沒有 LLM 配置，使用預設邏輯
+                    response = self._generate_default_coordination_response(
+                        analysis["research_topic"], analysis["locale"]
+                    )
+                    return {
+                        "response_type": "coordination",
+                        "response": response,
+                        "next_action": "planner",
+                        "research_topic": analysis["research_topic"],
+                        "locale": analysis["locale"],
+                    }
+
+        except Exception as e:
+            logger.error(f"處理用戶輸入失敗: {e}")
             return {
-                "response_type": "handoff",
-                "response": None,
-                "next_action": "planner",
-                "research_topic": analysis["research_topic"],
-                "locale": analysis["locale"],
+                "response_type": "error",
+                "response": f"抱歉，處理您的請求時出現錯誤：{str(e)}",
+                "error": str(e),
             }
 
     def _generate_greeting_response(self, locale: str) -> str:
@@ -231,3 +289,83 @@ class CoordinatorAgent(UserProxyResearchAgent):
             return "抱歉，我不能協助處理這類請求。讓我們聊聊我可以幫助你的其他事情吧，比如研究問題或資訊查詢。"
         else:
             return "I'm sorry, but I can't assist with that type of request. Let's talk about other things I can help you with, like research questions or information queries."
+
+    async def _generate_coordination_response(
+        self, user_input: str, analysis: Dict[str, Any]
+    ) -> str:
+        """使用 LLM 生成協調回應"""
+        logger.info(f"使用 LLM 生成協調回應: {user_input}")
+
+        # 構建 LLM 提示
+        prompt = self._build_coordination_prompt(user_input, analysis)
+
+        try:
+            # 調用真正的 LLM API
+
+            # 使用 AGENT_LLM_MAP 中定義的協調者 LLM 類型
+            llm_type = AGENT_LLM_MAP["coordinator"]
+            llm = get_llm_by_type(llm_type)
+
+            # 構建訊息格式
+            messages = [
+                SystemMessage(content="你是一個專業的研究協調者，負責分析用戶需求並制定研究計劃。"),
+                HumanMessage(content=prompt),
+            ]
+
+            # 調用 LLM
+            logger.info(f"正在調用 {llm_type} LLM API 生成協調回應...")
+            response = llm.invoke(messages)
+
+            # 提取回應內容
+            coordination_response = response.content.strip()
+            logger.info(f"{llm_type} LLM API 調用成功，已生成協調回應")
+
+            return coordination_response
+
+        except Exception as e:
+            logger.warning(f"LLM API 調用失敗，使用預設回應: {e}")
+            # 降級到預設邏輯
+            return self._generate_default_coordination_response(
+                analysis["research_topic"], analysis["locale"]
+            )
+
+    def _generate_default_coordination_response(self, research_topic: str, locale: str) -> str:
+        """生成預設協調回應（當 LLM 不可用時）"""
+        logger.info(f"生成預設協調回應: {research_topic}")
+
+        if locale == "zh-TW":
+            return f"""我瞭解您想要研究「{research_topic}」的相關資訊。
+
+作為協調者，我將為您安排多智能體研究團隊來完成這項任務：
+• 計劃者將制定詳細的研究計劃
+• 研究者將收集相關資料和資訊
+• 報告者將整合所有資訊生成完整報告
+
+讓我們開始這個研究流程..."""
+        else:
+            return f"""I understand you want to research "{research_topic}".
+
+As the coordinator, I will arrange a multi-agent research team to complete this task:
+• The planner will create a detailed research plan
+• The researcher will collect relevant data and information
+• The reporter will integrate all information into a comprehensive report
+
+Let's start this research process..."""
+
+    def _build_coordination_prompt(self, user_input: str, analysis: Dict[str, Any]) -> str:
+        """構建協調提示"""
+        research_topic = analysis["research_topic"]
+        locale = analysis["locale"]
+
+        prompt = f"""用戶請求: {user_input}
+研究主題: {research_topic}
+語言環境: {locale}
+
+作為研究協調者，請分析這個研究需求並生成適當的協調回應。
+回應應該：
+1. 確認對研究主題的理解
+2. 說明將要採用的研究流程
+3. 表達對任務的信心和專業態度
+4. 使用與用戶相同的語言"""
+
+        return prompt

@@ -230,6 +230,57 @@ class LedgerOrchestrator:
 4. 程式設計師執行技術分析（如需要）
 5. 報告者整理並生成最終報告"""
 
+    def _analyze_agent_response(self, agent_name: str, response_content: str) -> Dict[str, Any]:
+        """分析智能體回應內容，提取關鍵資訊"""
+        analysis = {"key_points": [], "status": "unknown", "next_requirements": [], "summary": ""}
+
+        # 根據智能體類型分析回應內容
+        if agent_name == "CoordinatorAgent":
+            # 分析協調者的回應
+            if "研究" in response_content or "分析" in response_content:
+                analysis["status"] = "analysis_complete"
+                analysis["key_points"].append("任務需求已分析")
+            if "計劃" in response_content or "步驟" in response_content:
+                analysis["status"] = "planning_ready"
+                analysis["next_requirements"].append("需要制定詳細執行計劃")
+
+        elif agent_name == "PlannerAgent":
+            # 分析計劃者的回應
+            if "步驟" in response_content or "計劃" in response_content:
+                analysis["status"] = "plan_ready"
+                analysis["key_points"].append("執行計劃已制定")
+                analysis["next_requirements"].append("需要開始實際研究工作")
+            if "研究" in response_content:
+                analysis["key_points"].append("研究策略已確定")
+
+        elif agent_name == "ResearcherAgent":
+            # 分析研究者的回應
+            if "發現" in response_content or "資料" in response_content:
+                analysis["status"] = "research_complete"
+                analysis["key_points"].append("研究資料已收集")
+                analysis["next_requirements"].append("需要整合資訊生成報告")
+            if "程式" in response_content or "代碼" in response_content:
+                analysis["next_requirements"].append("需要程式碼分析")
+
+        elif agent_name == "CoderAgent":
+            # 分析程式設計師的回應
+            if "分析" in response_content or "處理" in response_content:
+                analysis["status"] = "code_analysis_complete"
+                analysis["key_points"].append("程式碼分析已完成")
+                analysis["next_requirements"].append("需要生成綜合報告")
+
+        elif agent_name == "ReporterAgent":
+            # 分析報告者的回應
+            if "報告" in response_content or "完成" in response_content:
+                analysis["status"] = "report_complete"
+                analysis["key_points"].append("最終報告已生成")
+
+        # 生成摘要
+        if analysis["key_points"]:
+            analysis["summary"] = "；".join(analysis["key_points"])
+
+        return analysis
+
     async def update_ledger(self) -> LedgerEntry:
         """更新 Ledger 狀態"""
         max_retries = 3
@@ -294,68 +345,98 @@ class LedgerOrchestrator:
         # 檢查最近的消息確定下一步
         last_message = self.conversation_history[-1]
         last_sender = last_message["sender"]
+        last_content = last_message["content"]
+
+        # 分析最後一個智能體的回應內容
+        response_analysis = self._analyze_agent_response(last_sender, last_content)
 
         if last_sender == "CoordinatorAgent":
+            # 基於協調者的回應內容生成指令
+            if response_analysis["status"] == "analysis_complete":
+                instruction = "基於協調者的分析，請制定詳細的執行計劃，包括具體的研究步驟和時間安排"
+            elif response_analysis["status"] == "planning_ready":
+                instruction = "基於協調者的分析，請制定詳細的執行計劃"
+            else:
+                instruction = "基於協調者的分析，請制定詳細的執行計劃"
+
             return {
                 "is_request_satisfied": False,
                 "is_in_loop": False,
                 "is_progress_being_made": True,
                 "next_speaker": "PlannerAgent",
-                "instruction_or_question": "基於協調者的分析，請制定詳細的執行計劃",
-                "reasoning": "協調完成，需要制定具體計劃",
+                "instruction_or_question": instruction,
+                "reasoning": f"協調完成：{response_analysis['summary']}",
                 "current_step": "計劃制定",
                 "completed_steps": ["任務協調"],
-                "facts_learned": ["任務需求已分析"],
+                "facts_learned": response_analysis["key_points"],
             }
 
         elif last_sender == "PlannerAgent":
+            # 基於計劃者的回應內容生成指令
+            if response_analysis["status"] == "plan_ready":
+                instruction = "請根據制定的計劃開始收集相關資訊和進行研究，確保按照計劃的步驟執行"
+            else:
+                instruction = "請根據計劃開始收集相關資訊和進行研究"
+
             return {
                 "is_request_satisfied": False,
                 "is_in_loop": False,
                 "is_progress_being_made": True,
                 "next_speaker": "ResearcherAgent",
-                "instruction_or_question": "請根據計劃開始收集相關資訊和進行研究",
-                "reasoning": "計劃已制定，需要開始實際研究工作",
+                "instruction_or_question": instruction,
+                "reasoning": f"計劃已制定：{response_analysis['summary']}",
                 "current_step": "資訊收集",
                 "completed_steps": ["任務協調", "計劃制定"],
-                "facts_learned": ["任務需求已分析", "執行計劃已制定"],
+                "facts_learned": ["任務需求已分析", "執行計劃已制定"]
+                + response_analysis["key_points"],
             }
 
         elif last_sender == "ResearcherAgent":
+            # 基於研究者的回應內容生成指令
+            research_summary = f"基於研究者的發現：{last_content[:100]}..."
+
             # 檢查是否需要程式碼分析
             if "程式" in self.task or "代碼" in self.task or "code" in self.task.lower():
+                instruction = f"{research_summary} 請對相關程式碼進行分析和處理，整合研究發現"
                 return {
                     "is_request_satisfied": False,
                     "is_in_loop": False,
                     "is_progress_being_made": True,
                     "next_speaker": "CoderAgent",
-                    "instruction_or_question": "請對相關程式碼進行分析和處理",
-                    "reasoning": "任務涉及程式碼，需要技術分析",
+                    "instruction_or_question": instruction,
+                    "reasoning": f"研究完成，需要技術分析：{response_analysis['summary']}",
                     "current_step": "程式碼分析",
                     "completed_steps": ["任務協調", "計劃制定", "資訊收集"],
-                    "facts_learned": ["任務需求已分析", "執行計劃已制定", "研究資料已收集"],
+                    "facts_learned": ["任務需求已分析", "執行計劃已制定", "研究資料已收集"]
+                    + response_analysis["key_points"],
                 }
             else:
+                instruction = f"{research_summary} 請基於收集的資訊生成最終報告"
                 return {
                     "is_request_satisfied": False,
                     "is_in_loop": False,
                     "is_progress_being_made": True,
                     "next_speaker": "ReporterAgent",
-                    "instruction_or_question": "請基於收集的資訊生成最終報告",
-                    "reasoning": "研究完成，可以生成報告",
+                    "instruction_or_question": instruction,
+                    "reasoning": f"研究完成，可以生成報告：{response_analysis['summary']}",
                     "current_step": "報告生成",
                     "completed_steps": ["任務協調", "計劃制定", "資訊收集"],
-                    "facts_learned": ["任務需求已分析", "執行計劃已制定", "研究資料已收集"],
+                    "facts_learned": ["任務需求已分析", "執行計劃已制定", "研究資料已收集"]
+                    + response_analysis["key_points"],
                 }
 
         elif last_sender == "CoderAgent":
+            # 基於程式設計師的回應內容生成指令
+            code_analysis = f"基於程式碼分析結果：{last_content[:100]}..."
+            instruction = f"{code_analysis} 請整合研究結果和程式碼分析，生成最終報告"
+
             return {
                 "is_request_satisfied": False,
                 "is_in_loop": False,
                 "is_progress_being_made": True,
                 "next_speaker": "ReporterAgent",
-                "instruction_or_question": "請整合研究結果和程式碼分析，生成最終報告",
-                "reasoning": "技術分析完成，需要生成綜合報告",
+                "instruction_or_question": instruction,
+                "reasoning": f"技術分析完成，需要生成綜合報告：{response_analysis['summary']}",
                 "current_step": "報告生成",
                 "completed_steps": ["任務協調", "計劃制定", "資訊收集", "程式碼分析"],
                 "facts_learned": [
@@ -363,7 +444,8 @@ class LedgerOrchestrator:
                     "執行計劃已制定",
                     "研究資料已收集",
                     "程式碼已分析",
-                ],
+                ]
+                + response_analysis["key_points"],
             }
 
         elif last_sender == "ReporterAgent":
@@ -373,7 +455,7 @@ class LedgerOrchestrator:
                 "is_progress_being_made": True,
                 "next_speaker": "",
                 "instruction_or_question": "任務已完成",
-                "reasoning": "報告已生成，任務完成",
+                "reasoning": f"報告已生成，任務完成：{response_analysis['summary']}",
                 "current_step": "任務完成",
                 "completed_steps": ["任務協調", "計劃制定", "資訊收集", "程式碼分析", "報告生成"],
                 "facts_learned": [
@@ -382,7 +464,8 @@ class LedgerOrchestrator:
                     "研究資料已收集",
                     "程式碼已分析",
                     "最終報告已生成",
-                ],
+                ]
+                + response_analysis["key_points"],
             }
 
         # 預設情況
@@ -472,6 +555,58 @@ class LedgerOrchestrator:
         # 更新計劃
         # 這裡應該調用 LLM 重新制定計劃，現在簡化處理
         self.plan += f"\n更新的計劃（第 {self.replan_counter} 次修正）"
+
+    async def _get_agent_instruction(
+        self, agent: BaseResearchAgent, task: str, round_num: int
+    ) -> str:
+        """
+        根據智能體角色和任務狀態生成具體的指令
+
+        Args:
+            agent: 智能體實例
+            task: 當前任務
+            round_num: 當前輪數
+
+        Returns:
+            str: 給智能體的具體指令
+        """
+        role = agent.role
+        name = agent.name
+
+        # 根據角色和輪數生成不同的指令
+        if role == AgentRole.COORDINATOR:
+            if round_num == 0:
+                return f"請分析任務 '{task}' 並制定整體執行策略。你需要協調其他智能體完成這個任務。"
+            else:
+                return f"基於前面的進展，請評估任務完成度並決定下一步行動。任務：{task}"
+
+        elif role == AgentRole.PLANNER:
+            if round_num == 0:
+                return f"請為任務 '{task}' 制定詳細的執行計劃，包括具體步驟和時間安排。"
+            else:
+                return f"請根據前面的執行結果，調整和優化執行計劃。任務：{task}"
+
+        elif role == AgentRole.RESEARCHER:
+            if round_num == 0:
+                return f"請開始研究任務 '{task}'，收集相關的資訊和資料。"
+            else:
+                return f"請繼續深入研究任務 '{task}'，補充更多詳細資訊和最新發展。"
+
+        elif role == AgentRole.CODER:
+            if round_num == 0:
+                return f"請分析任務 '{task}' 的技術需求，提供相關的程式碼範例或技術解決方案。"
+            else:
+                return f"請根據前面的研究結果，提供更深入的技術分析和程式碼實作。任務：{task}"
+
+        elif role == AgentRole.REPORTER:
+            if round_num == 0:
+                return f"請開始準備任務 '{task}' 的報告大綱和結構。"
+            else:
+                return f"請整合前面所有的研究成果，生成關於 '{task}' 的完整報告。"
+
+        else:
+            # 預設指令
+            return f"請處理任務：{task}"
 
     def get_status(self) -> Dict[str, Any]:
         """取得當前狀態"""

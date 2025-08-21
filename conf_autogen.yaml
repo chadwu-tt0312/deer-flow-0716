@@ -8,10 +8,7 @@
 autogen:
   # 預設 LLM 配置
   default_llm_config:
-    model: "gpt-4o-mini"
-    api_key: "${OPENAI_API_KEY}"
-    temperature: 0.2
-    max_tokens: 1000
+    max_tokens: 100000
     timeout: 30
 
   # 智能體基本設定
@@ -50,7 +47,7 @@ agents:
     tools:
       - "web_search"
       - "crawl_tool"
-      - "local_search"
+      # - "local_search"
 
   coder:
     name: "CoderAgent"
@@ -67,7 +64,7 @@ agents:
     role: "reporter"
     system_message: "你是報告撰寫者，負責整理資訊並生成最終報告。"
     llm_config_override:
-      temperature: 0.4
+      temperature: 0.0
 
 # 工作流程配置
 workflows:
@@ -109,12 +106,22 @@ tools:
       args: ["mcp-github-trending"]
       enabled_tools: ["get_github_trending_repositories"]
 
-# 安全設定
-security:
-  enable_code_execution: true
-  sandbox_mode: true
-  allowed_file_extensions: [".py", ".txt", ".md", ".json", ".csv"]
-  max_file_size_mb: 10
+# 模型配置
+BASIC_MODEL:
+  model: $AZURE_DEPLOYMENT_NAME_4_1_MINI
+  azure_deployment: $AZURE_DEPLOYMENT_NAME_4_1_MINI
+  azure_endpoint: $AZURE_OPENAI_ENDPOINT
+  api_version: $BASIC_MODEL__API_VERSION
+  api_key: $BASIC_MODEL__API_KEY
+  verify_ssl: false
+
+REASONING_MODEL:
+  model: $AZURE_DEPLOYMENT_NAME_4_1
+  azure_deployment: $AZURE_DEPLOYMENT_NAME_4_1
+  azure_endpoint: $AZURE_OPENAI_ENDPOINT
+  api_version: $BASIC_MODEL__API_VERSION
+  api_key: $REASONING_MODEL__API_KEY
+  verify_ssl: false
 
 # 記錄設定
 LOGGING:
@@ -145,6 +152,13 @@ LOGGING:
   # 特定功能日誌
   conversation_log: true
   agent_actions_log: true
+
+# 安全設定
+security:
+  enable_code_execution: true
+  sandbox_mode: true
+  allowed_file_extensions: [".py", ".txt", ".md", ".json", ".csv"]
+  max_file_size_mb: 10
 
 # 效能設定
 performance:

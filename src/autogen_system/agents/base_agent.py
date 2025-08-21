@@ -11,26 +11,51 @@ from typing import Dict, List, Any, Optional, Union, Callable
 from abc import ABC, abstractmethod
 
 try:
-    from autogen import ConversableAgent, UserProxyAgent, AssistantAgent
-    from autogen.agentchat.groupchat import GroupChat, GroupChatManager
+    from autogen_agentchat.agents import ConversableAgent, UserProxyAgent, AssistantAgent
+    from autogen_agentchat.teams import BaseGroupChat as GroupChat
+
+    # 使用 BaseGroupChat 作為 GroupChatManager 的替代
+    GroupChatManager = BaseGroupChat
 except ImportError:
-    # 如果 AutoGen 未安裝，提供模擬類別
+    # 如果 AutoGen 未安裝，提供改進的模擬類別
     class ConversableAgent:
-        def __init__(self, *args, **kwargs):
-            pass
+        def __init__(self, **kwargs):
+            # 設置必要的屬性
+            self.name = kwargs.get("name", "UnknownAgent")
+            self.description = kwargs.get("description", "")
+            self.system_message = kwargs.get("system_message", "")
+            self.human_input_mode = kwargs.get("human_input_mode", "NEVER")
+            self.max_consecutive_auto_reply = kwargs.get("max_consecutive_auto_reply", 0)
+            self.llm_config = kwargs.get("llm_config", {})
+            self._function_map = kwargs.get("function_map", {})
+
+            # 設置其他可能的屬性
+            for key, value in kwargs.items():
+                if not hasattr(self, key):
+                    setattr(self, key, value)
 
     class UserProxyAgent(ConversableAgent):
-        pass
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.human_input_mode = kwargs.get("human_input_mode", "TERMINATE")
+            self.max_consecutive_auto_reply = kwargs.get("max_consecutive_auto_reply", 0)
 
     class AssistantAgent(ConversableAgent):
-        pass
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.human_input_mode = kwargs.get("human_input_mode", "NEVER")
+            self.max_consecutive_auto_reply = kwargs.get("max_consecutive_auto_reply", 1)
 
     class GroupChat:
-        def __init__(self, *args, **kwargs):
-            pass
+        def __init__(self, agents=None, messages=None, max_round=1, **kwargs):
+            self.agents = agents or []
+            self.messages = messages or []
+            self.max_round = max_round
 
     class GroupChatManager(ConversableAgent):
-        pass
+        def __init__(self, groupchat=None, **kwargs):
+            super().__init__(**kwargs)
+            self.groupchat = groupchat
 
 
 from ..config.agent_config import AgentConfig, AgentRole

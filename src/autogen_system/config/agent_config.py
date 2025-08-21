@@ -46,6 +46,25 @@ class LLMConfig:
     seed: Optional[int] = None
     extra_params: Dict[str, Any] = field(default_factory=dict)
 
+    def to_autogen_config(self) -> Dict[str, Any]:
+        """轉換為 AutoGen 標準的 LLM 配置格式"""
+        config = {
+            "model": self.model,
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+            "timeout": self.timeout,
+            **self.extra_params,
+        }
+
+        if self.api_key:
+            config["api_key"] = self.api_key
+        if self.base_url:
+            config["base_url"] = self.base_url
+        if self.seed:
+            config["seed"] = self.seed
+
+        return config
+
 
 @dataclass
 class CodeExecutionConfig:
@@ -199,7 +218,7 @@ DEFAULT_RESEARCH_WORKFLOW_CONFIG = WorkflowConfig(
             name="ReporterAgent",
             role=AgentRole.REPORTER,
             system_message="你是報告撰寫者，負責整理資訊並生成最終報告。",
-            llm_config=LLMConfig(temperature=0.4),
+            llm_config=LLMConfig(temperature=0),
         ),
     ],
     group_chat_config=GroupChatConfig(

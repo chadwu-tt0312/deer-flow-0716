@@ -16,6 +16,9 @@ from dataclasses import dataclass
 from .base_agent import BaseResearchAgent, AssistantResearchAgent
 from ..config.agent_config import AgentConfig, AgentRole
 from src.logging import get_logger
+from src.llms.llm import get_llm_by_type
+from langchain.schema import HumanMessage, SystemMessage
+from src.config.agents import AGENT_LLM_MAP
 
 logger = get_logger(__name__)
 
@@ -239,8 +242,13 @@ interface Plan {
         # 構建提示
         prompt = self._build_planning_prompt(research_topic, background_context)
 
-        # 模擬 LLM 響應（實際實現中會調用真正的 LLM）
-        plan_json = await self._simulate_planning_response(research_topic, locale)
+        try:
+            # 調用真正的 LLM API 生成研究計劃
+            plan_json = await self._generate_planning_response(prompt, research_topic, locale)
+        except Exception as e:
+            logger.warning(f"LLM API 調用失敗，使用預設計劃: {e}")
+            # 降級到預設計劃
+            plan_json = await self._simulate_planning_response(research_topic, locale)
 
         # 解析計劃
         plan = self._parse_plan_json(plan_json)
@@ -265,6 +273,34 @@ interface Plan {
 請按照系統訊息中的指示，評估上下文充足性並創建計劃。
 """
         return prompt
+
+    async def _generate_planning_response(
+        self, prompt: str, research_topic: str, locale: str
+    ) -> str:
+        """使用 LLM API 生成計劃響應"""
+        logger.info(f"使用 LLM API 生成研究計劃: {research_topic}")
+
+        try:
+            # 使用 AGENT_LLM_MAP 中定義的計劃者 LLM 類型
+            llm_type = AGENT_LLM_MAP["planner"]
+            llm = get_llm_by_type(llm_type)
+
+            # 構建訊息格式
+            messages = [SystemMessage(content=self.SYSTEM_MESSAGE), HumanMessage(content=prompt)]
+
+            # 調用 LLM
+            logger.info(f"正在調用 {llm_type} LLM API 生成研究計劃...")
+            response = llm.invoke(messages)
+
+            # 提取回應內容
+            planning_response = response.content.strip()
+            logger.info(f"{llm_type} LLM API 調用成功，已生成研究計劃")
+
+            return planning_response
+
+        except Exception as e:
+            logger.error(f"LLM API 調用失敗: {e}")
+            raise
 
     async def _simulate_planning_response(self, research_topic: str, locale: str) -> str:
         """模擬計劃響應（實際實現會調用 LLM）"""
@@ -411,3 +447,47 @@ interface Plan {
         evaluation["quality_score"] = score
 
         return evaluation
+
+    def _generate_research_plan(self, research_topic: str, locale: str = "zh-TW") -> str:
+        """生成研究計劃"""
+        logger.info(f"生成研究計劃: {research_topic}")
+
+        # 創建研究步驟
+        steps = []
+
+        steps.append(
+            {
+                "need_search": True,
+                "title": f"收集{research_topic}的基礎資訊",
+                "description": f"搜尋{research_topic}的基本概念、定義和背景資料",
+                "step_type": "research",
+            }
+        )
+
+        steps.append(
+            {
+                "need_search": True,
+                "title": f"收集{research_topic}的最新發展",
+                "description": f"搜尋{research_topic}的最新趨勢、技術進展和應用案例",
+                "step_type": "research",
+            }
+        )
+
+        steps.append(
+            {
+                "need_search": True,
+                "title": f"收集{research_topic}的專家觀點",
+                "description": f"搜尋專家評論、學術研究和行業分析報告",
+                "step_type": "research",
+            }
+        )
+
+        plan = {
+            "locale": locale,
+            "has_enough_context": False,  # 預設需要更多資訊
+            "thought": f"用戶想要了解{research_topic}的相關資訊。這需要全面的研究來收集充足的資料。",
+            "title": f"{research_topic}深度研究報告",
+            "steps": steps,
+        }
+
+        return str(plan)

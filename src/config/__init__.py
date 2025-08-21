@@ -5,11 +5,11 @@ from .loader import load_yaml_config
 from .tools import SELECTED_SEARCH_ENGINE, SearchEngine
 from .questions import BUILT_IN_QUESTIONS, BUILT_IN_QUESTIONS_ZH_CN
 
-# 移除 dotenv 導入以避免循環導入問題
-# from dotenv import load_dotenv
+# 載入環境變數
+from dotenv import load_dotenv
 
 # Load environment variables
-# load_dotenv()
+load_dotenv()
 
 # Team configuration
 TEAM_MEMBER_CONFIGURATIONS = {
