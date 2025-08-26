@@ -41,14 +41,6 @@ os.makedirs("logs", exist_ok=True)
 
 logger.info("🚀 AutoGen 系統基本使用範例開始初始化")
 
-# 測試日誌記錄功能
-logger.info("🧪 測試日誌記錄功能...")
-logger.debug("這是一條 DEBUG 日誌")
-logger.info("這是一條 INFO 日誌")
-logger.warning("這是一條 WARNING 日誌")
-logger.error("這是一條 ERROR 日誌")
-logger.info("✅ 日誌記錄功能測試完成")
-
 
 def check_environment_and_config():
     """檢查環境變數和配置"""
@@ -146,7 +138,6 @@ def create_agent_configs(llm_config: LLMConfig):
                 logger.info(f"🔧 創建智能體 {agent_key} 的配置...")
                 # 使用配置載入器創建智能體配置
                 agent_config = config_loader.load_agent_config(agent_key, agent_dict)
-                logger.info(f"✅ 智能體 {agent_key} 配置創建成功")
 
                 # 如果智能體有自己的 LLM 配置覆蓋，使用它
                 if agent_dict.get("llm_config_override"):
@@ -232,23 +223,23 @@ def create_agent_instances(agent_configs: dict):
 
             if agent_config.role == AgentRole.COORDINATOR:
                 logger.info(f"🎭 創建協調者智能體: {agent_key}")
-                agents[agent_config.name] = AgentFactory.create_coordinator(agent_config)
+                agents[agent_key] = AgentFactory.create_coordinator(agent_config)
                 logger.info(f"✅ 協調者智能體 {agent_key} 創建成功")
             elif agent_config.role == AgentRole.PLANNER:
                 logger.info(f"📋 創建計劃者智能體: {agent_key}")
-                agents[agent_config.name] = AgentFactory.create_planner(agent_config)
+                agents[agent_key] = AgentFactory.create_planner(agent_config)
                 logger.info(f"✅ 計劃者智能體 {agent_key} 創建成功")
             elif agent_config.role == AgentRole.RESEARCHER:
                 logger.info(f"🔍 創建研究者智能體: {agent_key}")
-                agents[agent_config.name] = AgentFactory.create_researcher(agent_config)
+                agents[agent_key] = AgentFactory.create_researcher(agent_config)
                 logger.info(f"✅ 研究者智能體 {agent_key} 創建成功")
             elif agent_config.role == AgentRole.CODER:
                 logger.info(f"💻 創建程式設計師智能體: {agent_key}")
-                agents[agent_config.name] = AgentFactory.create_coder(agent_config)
+                agents[agent_key] = AgentFactory.create_coder(agent_config)
                 logger.info(f"✅ 程式設計師智能體 {agent_key} 創建成功")
             elif agent_config.role == AgentRole.REPORTER:
                 logger.info(f"📊 創建報告者智能體: {agent_key}")
-                agents[agent_config.name] = AgentFactory.create_reporter(agent_config)
+                agents[agent_key] = AgentFactory.create_reporter(agent_config)
                 logger.info(f"✅ 報告者智能體 {agent_key} 創建成功")
             else:
                 logger.warning(f"⚠️  未知的智能體角色: {agent_config.role}")
@@ -724,12 +715,13 @@ if __name__ == "__main__":
     logger.info("📋 執行完整工作流範例...")
     result1 = asyncio.run(simple_research_workflow())
     logger.info("✅ 完整工作流範例執行完成")
+    print(f"\n📊 編排器狀態: {result1}")
 
-    print("\n2️⃣ 獨立編排器範例:")
-    logger.info("📋 執行獨立編排器範例...")
-    result2 = asyncio.run(standalone_orchestrator_example())
-    logger.info("✅ 獨立編排器範例執行完成")
+    # print("\n2️⃣ 獨立編排器範例:")
+    # logger.info("📋 執行獨立編排器範例...")
+    # result2 = asyncio.run(standalone_orchestrator_example())
+    # logger.info("✅ 獨立編排器範例執行完成")
+    # print(f"\n📊 編排器狀態: {result2}")
 
-    print(f"\n📊 編排器狀態: {result2}")
     logger.info("🎉 所有範例執行完成")
     print("\n🎉 範例執行完成!")

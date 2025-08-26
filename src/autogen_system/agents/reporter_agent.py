@@ -2,23 +2,57 @@
 # SPDX-License-Identifier: MIT
 
 """
-報告者智能體
+報告者智能體 - AutoGen 框架版本
 
 負責整合研究結果並生成最終報告。
-基於原有的 reporter_node 實現。
+基於 reporter_node 實現，使用 AutoGen 的 BaseChatAgent。
 """
 
 import re
+import json
+import logging
 from typing import Dict, Any, List, Optional
 from datetime import datetime
 from dataclasses import dataclass
 from enum import Enum
 
-from .base_agent import BaseResearchAgent, AssistantResearchAgent
-from ..config.agent_config import AgentConfig, AgentRole
-from src.logging import get_logger
+# AutoGen 核心組件
+from autogen_core import CancellationToken
+from autogen_core.models import (
+    ChatCompletionClient,
+    SystemMessage,
+    UserMessage,
+    AssistantMessage,
+    LLMMessage,
+)
 
-logger = get_logger(__name__)
+# AutoGen AgentChat 基礎類
+from autogen_agentchat.agents import BaseChatAgent
+from autogen_agentchat.messages import TextMessage
+
+# 嘗試導入線程管理功能
+try:
+    from src.logging import (
+        setup_thread_logging,
+        set_thread_context,
+        get_current_thread_id,
+        get_current_thread_logger,
+    )
+
+    HAS_THREAD_LOGGING = True
+except ImportError:
+    HAS_THREAD_LOGGING = False
+
+# 嘗試導入提示模板功能
+try:
+    from src.prompts.template import apply_prompt_template
+    from src.config.configuration import Configuration
+
+    HAS_PROMPT_TEMPLATES = True
+except ImportError:
+    HAS_PROMPT_TEMPLATES = False
+
+logger = logging.getLogger(__name__)
 
 
 class ReportStyle(Enum):
@@ -55,11 +89,11 @@ class FinalReport:
     metadata: Dict[str, Any]
 
 
-class ReporterAgent(AssistantResearchAgent):
+class ReporterAgent(BaseChatAgent):
     """
-    報告者智能體
+    報告者智能體 - AutoGen 框架版本
 
-    角色職責：
+    基於 reporter_node 實現，角色職責：
     1. 整合來自各個智能體的研究結果
     2. 分析和組織收集的資訊
     3. 生成結構化的最終報告
@@ -68,554 +102,524 @@ class ReporterAgent(AssistantResearchAgent):
     6. 確保報告的完整性和可讀性
     """
 
-    # 提示模板（基於原有的 reporter.md）
-    SYSTEM_MESSAGE = """你是一位專業記者，負責根據提供的資訊和可驗證的事實撰寫清晰、全面的報告。你的報告應採用專業語調。
+    def __init__(
+        self,
+        name: str,
+        model_client: ChatCompletionClient,
+        description: str = "報告者智能體 - 整合研究結果並生成最終報告",
+        system_messages: Optional[List[SystemMessage]] = None,
+    ):
+        """
+        初始化報告者智能體
 
-# 角色
+        Args:
+            name: 智能體名稱
+            model_client: ChatCompletionClient 實例
+            description: 智能體描述
+            system_messages: 系統消息列表
+        """
+        super().__init__(name=name, description=description)
 
-你應該扮演一個客觀且分析性的記者：
-- 準確且公正地呈現事實
-- 邏輯性地組織資訊
-- 突出關鍵發現和洞察
-- 使用清晰簡潔的語言
-- 豐富報告，包含前面步驟的相關圖片
-- 嚴格依賴提供的資訊
-- 絕不編造或假設資訊
-- 清楚區分事實和分析
+        self._model_client = model_client
+        self._system_messages = system_messages or []
+        self._chat_history: List[LLMMessage] = []
 
-# 報告結構
+        # 線程管理
+        self._current_thread_id: Optional[str] = None
+        self._thread_logger = None
 
-按照以下格式組織你的報告：
+        # 狀態管理
+        self._state: Dict[str, Any] = {}
+        self._configuration: Optional[Any] = None
 
-**注意：以下所有章節標題必須根據語言環境進行翻譯。**
-
-1. **標題**
-   - 報告的簡潔標題
-   - 始終使用一級標題
-
-2. **關鍵要點**
-   - 最重要發現的項目清單（4-6點）
-   - 每點應簡潔（1-2句）
-   - 專注於最重要和可行的資訊
-
-3. **概述**
-   - 主題的簡介（1-2段）
-   - 提供背景和重要性
-
-4. **詳細分析**
-   - 將資訊組織成邏輯章節，標題清晰
-   - 根據需要包含相關子章節
-   - 以結構化、易於理解的方式呈現資訊
-   - 突出意外或特別值得注意的細節
-   - **在報告中包含前面步驟的圖片非常有幫助**
-
-5. **調查說明**（用於更全面的報告）
-   - 更詳細的學術風格分析
-   - 包含涵蓋主題所有方面的全面章節
-   - 可包含比較分析、表格和詳細功能細分
-   - 對於較短的報告，此章節是可選的
-
-6. **關鍵引用**
-   - 在最後以連結參考格式列出所有參考資料
-   - 每個引用之間包含空行以提高可讀性
-   - 格式：`- [來源標題](URL)`
-
-# 寫作指南
-
-1. 寫作風格：
-   - 使用專業語調
-   - 簡潔精確
-   - 避免推測
-   - 用證據支持聲明
-   - 清楚說明資訊來源
-   - 如果資料不完整或不可用，請說明
-   - 絕不創造或推斷資料
-
-2. 格式：
-   - 使用適當的 markdown 語法
-   - 為章節包含標題
-   - 優先使用 Markdown 表格進行資料呈現和比較
-   - **在報告中包含前面步驟的圖片非常有幫助**
-   - 在呈現比較資料、統計、功能或選項時使用表格
-   - 用清晰的標題和對齊的列構建表格
-   - 使用連結、清單、行內程式碼和其他格式選項讓報告更易讀
-   - 為重要點添加強調
-   - 不在文字中包含行內引用
-   - 使用水平線（---）分隔主要章節
-   - 追蹤資訊來源但保持主文字清潔易讀
-
-# 資料完整性
-
-- 僅使用輸入中明確提供的資訊
-- 當資料缺失時說明「未提供資訊」
-- 絕不創造虛構的例子或場景
-- 如果資料似乎不完整，承認其限制
-- 不對缺失資訊做假設
-
-# 表格指南
-
-- 使用 Markdown 表格呈現比較資料、統計、功能或選項
-- 始終包含清晰的標題行和列名
-- 適當對齊列（文字左對齊，數字右對齊）
-- 保持表格簡潔並專注於關鍵資訊
-- 使用適當的 Markdown 表格語法
-
-# 注意事項
-
-- 如果對任何資訊不確定，承認不確定性
-- 僅包含來自提供來源材料的可驗證事實
-- 將所有引用放在最後的「關鍵引用」章節，而不是在文字中行內引用
-- 對於每個引用，使用格式：`- [來源標題](URL)`
-- 每個引用之間包含空行以提高可讀性
-- 使用格式包含圖片。圖片應在報告中間，而不是最後或單獨章節
-- 包含的圖片應**僅**來自**前面步驟**收集的資訊。**絕不**包含不是來自前面步驟的圖片
-- 直接輸出 Markdown 原始內容，不使用 "```markdown" 或 "```"
-- 始終使用指定的語言環境輸出"""
-
-    def __init__(self, config: AgentConfig, **kwargs):
-        """初始化報告者智能體"""
-        config.system_message = self.SYSTEM_MESSAGE
-
-        super().__init__(config, **kwargs)
-
-        # 報告配置
+        # 兼容屬性
+        self.role = "reporter"
         self.report_style = ReportStyle.PROFESSIONAL
-        self.current_locale = "zh-CN"
-        self.use_tables = True
-        self.include_images = True
+        self.locale = "zh-TW"
 
-        logger.info(f"報告者智能體初始化完成: {config.name}")
+        logger.info(f"ReporterAgent 初始化完成: {name}")
 
-    def set_report_style(self, style: ReportStyle, locale: str = "zh-CN"):
+    # 提示模板（基於原有的 reporter.md）
+    DEFAULT_SYSTEM_MESSAGE = """你是一位專業記者，負責根據提供的資訊和可驗證的事實撰寫清晰、全面的報告。你的報告應採用專業語調。
+
+## 職責
+
+1. **資訊整合**: 將來自多個來源的資訊整合成連貫的報告
+2. **結構化撰寫**: 創建清晰的報告結構，包括概述、詳細分析和結論
+3. **事實核查**: 確保所有資訊都是準確和可驗證的
+4. **引用管理**: 適當地引用所有來源和參考資料
+5. **格式化**: 使用適當的 Markdown 格式，包括表格和列表
+
+## 報告結構
+
+每個報告應包含以下部分：
+
+### 1. 關鍵要點
+- 以項目符號列出最重要的發現
+- 每個要點應簡潔且資訊豐富
+
+### 2. 概述
+- 對主題的簡短介紹
+- 為什麼這個主題重要
+- 報告將涵蓋的內容概要
+
+### 3. 詳細分析
+- 深入探討主題的各個方面
+- 組織成邏輯清晰的章節
+- 包含具體的資料、統計數據和例子
+
+### 4. 調查說明（可選）
+- 對於更全面的報告，包含調查方法和限制的說明
+
+### 5. 重要引用
+- 在報告末尾列出所有參考資料
+- 使用格式：`- [來源標題](URL)`
+- 每個引用之間留空行
+
+## 格式要求
+
+- **表格優先**: 在呈現比較資料、統計數據或特徵時，優先使用 Markdown 表格
+- **無內文引用**: 不要在文本中包含內文引用
+- **清晰的標題**: 使用適當的標題層級（## ### ####）
+- **視覺層次**: 使用粗體、斜體和列表來增強可讀性"""
+
+    def _setup_thread_context(self, thread_id: str):
+        """設置線程上下文和日誌"""
+        self._current_thread_id = thread_id
+
+        if HAS_THREAD_LOGGING:
+            try:
+                self._thread_logger = setup_thread_logging(thread_id)
+                set_thread_context(thread_id)
+
+                if self._thread_logger:
+                    self._thread_logger.info("ReporterAgent talking.")
+                else:
+                    logger.info("ReporterAgent talking.")
+            except Exception as e:
+                logger.warning(f"線程日誌設置失敗，使用標準 logger: {e}")
+                self._thread_logger = logger
+                logger.info("ReporterAgent talking.")
+        else:
+            self._thread_logger = logger
+            logger.info("ReporterAgent talking.")
+
+    def _get_thread_id_from_context(
+        self, cancellation_token: Optional[CancellationToken] = None
+    ) -> str:
+        """從上下文獲取線程 ID"""
+        if self._current_thread_id:
+            return self._current_thread_id
+
+        if HAS_THREAD_LOGGING:
+            try:
+                current_thread_id = get_current_thread_id()
+                if current_thread_id:
+                    return current_thread_id
+            except Exception:
+                pass
+
+        thread_id = f"reporter_thread_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+        logger.debug(f"生成新線程 ID: {thread_id}")
+        return thread_id
+
+    def _apply_dynamic_system_message(self, state: Dict[str, Any]) -> List[SystemMessage]:
+        """應用動態提示模板"""
+        if HAS_PROMPT_TEMPLATES:
+            try:
+                template_state = {
+                    "messages": state.get("messages", []),
+                    "locale": state.get("locale", "zh-TW"),
+                    "research_topic": state.get("research_topic", ""),
+                    **state,
+                }
+
+                if self._thread_logger:
+                    self._thread_logger.debug(f"模板狀態: {template_state}")
+
+                if self._configuration and HAS_PROMPT_TEMPLATES:
+                    if isinstance(self._configuration, dict):
+                        try:
+                            from src.config.configuration import Configuration
+
+                            config_obj = Configuration.from_runnable_config(
+                                {"configurable": self._configuration}
+                            )
+                            template_messages = apply_prompt_template(
+                                "reporter", template_state, config_obj
+                            )
+                        except Exception as config_error:
+                            if self._thread_logger:
+                                self._thread_logger.warning(
+                                    f"配置轉換失敗，使用無配置版本: {config_error}"
+                                )
+                            template_messages = apply_prompt_template("reporter", template_state)
+                    else:
+                        template_messages = apply_prompt_template(
+                            "reporter", template_state, self._configuration
+                        )
+                else:
+                    template_messages = apply_prompt_template("reporter", template_state)
+
+                system_messages = []
+                for msg in template_messages:
+                    if isinstance(msg, dict) and msg.get("role") == "system":
+                        system_messages.append(SystemMessage(content=msg["content"]))
+
+                if system_messages:
+                    if self._thread_logger:
+                        self._thread_logger.info("成功應用動態提示模板")
+                    return system_messages
+
+            except Exception as e:
+                error_details = f"動態提示模板應用失敗: {type(e).__name__}: {str(e)}"
+                if self._thread_logger:
+                    self._thread_logger.warning(error_details)
+                else:
+                    logger.warning(error_details)
+
+        # 降級到預設系統消息
+        if self._thread_logger:
+            self._thread_logger.info("使用預設系統提示")
+        else:
+            logger.info("使用預設系統提示")
+
+        return [SystemMessage(content=self.DEFAULT_SYSTEM_MESSAGE)]
+
+    async def on_messages(
+        self, messages: List[TextMessage], cancellation_token: Optional[CancellationToken] = None
+    ) -> TextMessage:
+        """
+        處理輸入消息的主要方法（AutoGen 標準接口）
+        """
+        try:
+            if not messages:
+                return TextMessage(content="沒有收到消息", source=self.name)
+
+            latest_message = messages[-1]
+            user_input = (
+                latest_message.content
+                if hasattr(latest_message, "content")
+                else str(latest_message)
+            )
+
+            # 設置線程上下文
+            thread_id = self._get_thread_id_from_context(cancellation_token)
+            self._setup_thread_context(thread_id)
+
+            if self._thread_logger:
+                self._thread_logger.info(f"ReporterAgent 開始處理報告生成: {user_input}")
+
+            # 調用報告生成邏輯
+            report_result = await self._generate_report_with_llm(user_input, cancellation_token)
+
+            return TextMessage(content=report_result, source=self.name)
+
+        except Exception as e:
+            error_msg = f"處理報告生成失敗: {str(e)}"
+            logger.error(error_msg)
+
+            if self._thread_logger:
+                self._thread_logger.error(error_msg)
+
+            return TextMessage(content=f"抱歉，生成報告時出現錯誤：{str(e)}", source=self.name)
+
+    async def _generate_report_with_llm(
+        self, user_input: str, cancellation_token: Optional[CancellationToken] = None
+    ) -> str:
+        """使用 LLM 生成報告"""
+        try:
+            # 更新狀態
+            self._state.update(
+                {
+                    "messages": [{"role": "user", "content": user_input}],
+                    "locale": self.locale,
+                    "research_topic": self._extract_topic_from_input(user_input),
+                }
+            )
+
+            # 準備動態系統消息
+            system_messages = self._apply_dynamic_system_message(self._state)
+
+            # 準備消息列表
+            messages = (
+                system_messages
+                + self._chat_history
+                + [UserMessage(content=user_input, source="user")]
+            )
+
+            if self._thread_logger:
+                self._thread_logger.info("調用 LLM API 進行報告生成...")
+
+            # 調用 LLM
+            response = await self._model_client.create(
+                messages=messages,
+                cancellation_token=cancellation_token,
+            )
+
+            response_content = response.content
+
+            if self._thread_logger:
+                self._thread_logger.info("LLM API 調用成功")
+                self._thread_logger.debug(f"LLM 回應: {response_content}")
+
+            return str(response_content)
+
+        except Exception as e:
+            if self._thread_logger:
+                self._thread_logger.error(f"LLM API 調用失敗: {e}")
+
+            # 降級到模擬報告
+            return await self._generate_fallback_report(user_input)
+
+    def _extract_topic_from_input(self, user_input: str) -> str:
+        """從輸入中提取主題"""
+        # 簡化版本 - 實際實現可以更複雜
+        lines = user_input.split("\n")
+        for line in lines:
+            if "主題" in line or "Topic" in line or "研究任務" in line:
+                return line.split(":", 1)[-1].strip() if ":" in line else line.strip()
+
+        # 降級到前100個字符
+        return user_input[:100] + "..." if len(user_input) > 100 else user_input
+
+    async def _generate_fallback_report(self, user_input: str) -> str:
+        """生成降級報告"""
+        if self._thread_logger:
+            self._thread_logger.info("使用降級報告生成")
+
+        topic = self._extract_topic_from_input(user_input)
+
+        return f"""# {topic} - 研究報告
+
+## 關鍵要點
+
+- 由於技術限制，本報告為簡化版本
+- 建議使用完整的研究工具進行更深入的分析
+- 需要進一步的資料收集和驗證
+
+## 概述
+
+本報告旨在提供關於「{topic}」的基本資訊。由於當前技術限制，無法進行完整的資料收集和分析。
+
+## 詳細分析
+
+### 基本資訊
+需要進一步的研究來收集詳細資訊。
+
+### 現狀分析
+建議使用專業的搜尋工具和資料庫來獲取最新資訊。
+
+### 趨勢分析
+需要更多資料來進行趨勢分析。
+
+## 調查說明
+
+本報告為降級版本，主要限制包括：
+- 無法進行網路搜尋
+- 缺乏實時資料存取
+- 無法驗證資訊來源
+
+## 重要引用
+
+- 需要進一步的資料收集
+"""
+
+    def set_report_style(self, style: ReportStyle, locale: str = "zh-TW"):
         """設定報告風格"""
         self.report_style = style
-        self.current_locale = locale
-        logger.info(f"報告風格設定: {style.value} ({locale})")
+        self.locale = locale
+        if self._thread_logger:
+            self._thread_logger.info(f"報告風格更新: style={style.value}, locale={locale}")
+        else:
+            logger.info(f"報告風格更新: style={style.value}, locale={locale}")
 
+    def set_configuration(self, configuration: Any):
+        """設置配置對象"""
+        self._configuration = configuration
+
+        if self._thread_logger:
+            self._thread_logger.info(f"配置已更新: {type(configuration).__name__}")
+        else:
+            logger.info(f"配置已更新: {type(configuration).__name__}")
+
+    def get_role_info(self) -> Dict[str, Any]:
+        """取得角色資訊（兼容 BaseResearchAgent 接口）"""
+        return {
+            "name": self.name,
+            "description": self.description,
+            "role": "reporter",
+            "tools": [],
+            "config": None,
+        }
+
+    async def process_user_input(self, user_input: str) -> Dict[str, Any]:
+        """
+        處理用戶輸入（兼容 BaseResearchAgent 接口）
+
+        Args:
+            user_input: 用戶輸入的內容
+
+        Returns:
+            Dict[str, Any]: 包含回應的字典
+        """
+        try:
+            # 設置線程上下文
+            thread_id = self._get_thread_id_from_context()
+            self._setup_thread_context(thread_id)
+
+            # 生成報告
+            report_result = await self._generate_report_with_llm(user_input)
+
+            return {
+                "response": report_result,
+                "locale": self.locale,
+                "status": "success",
+            }
+
+        except Exception as e:
+            if self._thread_logger:
+                self._thread_logger.error(f"處理用戶輸入失敗: {e}")
+            else:
+                logger.error(f"處理用戶輸入失敗: {e}")
+
+            return {
+                "response": f"抱歉，生成報告時發生錯誤：{str(e)}",
+                "locale": self.locale,
+                "status": "error",
+            }
+
+    # 實現 BaseChatAgent 的抽象方法
+    async def on_reset(self) -> None:
+        """處理重置事件"""
+        self._chat_history.clear()
+        self._state.clear()
+        self._current_thread_id = None
+        self._thread_logger = None
+
+    @property
+    def produced_message_types(self) -> List[type]:
+        """返回此智能體產生的消息類型"""
+        return [TextMessage]
+
+    # 兼容方法 - 保留舊接口
     async def generate_final_report(
         self,
         research_topic: str,
         research_plan: Dict[str, Any],
         observations: List[str],
-        locale: str = "zh-CN",
+        locale: str = "zh-TW",
         report_style: ReportStyle = ReportStyle.PROFESSIONAL,
     ) -> FinalReport:
         """
-        生成最終報告
-
-        Args:
-            research_topic: 研究主題
-            research_plan: 研究計劃
-            observations: 觀察和發現列表
-            locale: 語言環境
-            report_style: 報告風格
-
-        Returns:
-            FinalReport: 最終報告
+        生成最終報告（兼容舊接口）
         """
-        logger.info(f"開始生成最終報告: {research_topic}")
+        try:
+            # 設置參數
+            self.set_report_style(report_style, locale)
 
-        self.set_report_style(report_style, locale)
+            # 建構報告輸入
+            report_input = f"# 研究主題\n{research_topic}\n\n"
 
-        # 分析和組織觀察結果
-        organized_content = self._organize_observations(observations)
+            if research_plan:
+                report_input += (
+                    f"# 研究計劃\n{json.dumps(research_plan, ensure_ascii=False, indent=2)}\n\n"
+                )
+
+            if observations:
+                report_input += f"# 觀察結果\n"
+                for i, obs in enumerate(observations, 1):
+                    report_input += f"## 觀察 {i}\n{obs}\n\n"
+
+            # 生成報告
+            report_content = await self._generate_report_with_llm(report_input)
+
+            # 解析報告為 FinalReport
+            return self._parse_report_content(research_topic, report_content)
+
+        except Exception as e:
+            logger.error(f"生成最終報告失敗: {e}")
+            # 返回降級報告
+            return self._create_fallback_final_report(research_topic, locale)
+
+    def _parse_report_content(self, research_topic: str, report_content: str) -> FinalReport:
+        """解析報告內容"""
+        # 簡化解析 - 實際實現可以更複雜
+        lines = report_content.split("\n")
+
+        # 提取標題
+        title = research_topic
+        for line in lines:
+            if line.startswith("#") and not line.startswith("##"):
+                title = line.strip("# ").strip()
+                break
 
         # 提取關鍵要點
-        key_points = self._extract_key_points(organized_content)
+        key_points = []
+        in_key_points = False
+        for line in lines:
+            if "關鍵要點" in line or "Key Points" in line:
+                in_key_points = True
+                continue
+            if in_key_points and line.startswith("- "):
+                key_points.append(line[2:].strip())
+            elif in_key_points and line.startswith("#"):
+                break
 
-        # 生成報告標題
-        title = self._generate_report_title(research_topic)
+        # 提取引用
+        key_citations = []
+        for line in lines:
+            if line.strip().startswith("- [") and "](http" in line:
+                key_citations.append(line.strip())
 
-        # 生成概述
-        overview = self._generate_overview(research_topic, organized_content)
-
-        # 生成詳細分析
-        detailed_analysis = self._generate_detailed_analysis(organized_content)
-
-        # 生成調查說明（如果需要）
-        survey_note = self._generate_survey_note(organized_content)
-
-        # 提取引用和圖片
-        citations = self._extract_citations(observations)
-        images = self._extract_images(observations)
-
-        # 生成元資料
-        metadata = self._generate_metadata(research_topic, research_plan, locale)
-
-        report = FinalReport(
+        return FinalReport(
             title=title,
+            key_points=key_points,
+            overview="報告概述",
+            detailed_analysis=report_content,
+            survey_note=None,
+            key_citations=key_citations,
+            images=[],
+            metadata={
+                "generated_at": datetime.now().isoformat(),
+                "locale": self.locale,
+                "style": self.report_style.value,
+            },
+        )
+
+    def _create_fallback_final_report(self, research_topic: str, locale: str) -> FinalReport:
+        """創建降級最終報告"""
+        key_points = [
+            "由於技術限制，本報告為簡化版本",
+            "建議使用完整的研究工具進行更深入的分析",
+            "需要進一步的資料收集和驗證",
+        ]
+
+        overview = f"本報告旨在提供關於「{research_topic}」的基本資訊。由於當前技術限制，無法進行完整的資料收集和分析。"
+
+        detailed_analysis = f"""# {research_topic} - 研究報告
+
+## 概述
+{overview}
+
+## 詳細分析
+需要進一步的研究來收集詳細資訊。
+
+## 結論
+建議使用專業的搜尋工具和資料庫來獲取最新資訊。
+"""
+
+        return FinalReport(
+            title=f"{research_topic} - 研究報告",
             key_points=key_points,
             overview=overview,
             detailed_analysis=detailed_analysis,
-            survey_note=survey_note,
-            key_citations=citations,
-            images=images,
-            metadata=metadata,
-        )
-
-        logger.info("最終報告生成完成")
-        return report
-
-    def _organize_observations(self, observations: List[str]) -> Dict[str, Any]:
-        """組織觀察結果"""
-        organized = {
-            "main_findings": [],
-            "supporting_evidence": [],
-            "data_points": [],
-            "expert_opinions": [],
-            "statistical_info": [],
-            "background_info": [],
-        }
-
-        for observation in observations:
-            # 簡化的分類邏輯
-            if self._contains_statistics(observation):
-                organized["statistical_info"].append(observation)
-            elif self._contains_data_points(observation):
-                organized["data_points"].append(observation)
-            elif self._is_expert_opinion(observation):
-                organized["expert_opinions"].append(observation)
-            elif self._is_background_info(observation):
-                organized["background_info"].append(observation)
-            else:
-                organized["main_findings"].append(observation)
-
-        return organized
-
-    def _contains_statistics(self, text: str) -> bool:
-        """檢查是否包含統計資訊"""
-        stat_patterns = [r"\d+%", r"\d+\.\d+%", r"統計", r"數據", r"比例", r"percentage"]
-        return any(re.search(pattern, text) for pattern in stat_patterns)
-
-    def _contains_data_points(self, text: str) -> bool:
-        """檢查是否包含資料點"""
-        return any(word in text for word in ["資料", "數字", "指標", "量化", "data", "metric"])
-
-    def _is_expert_opinion(self, text: str) -> bool:
-        """檢查是否是專家意見"""
-        return any(word in text for word in ["專家", "學者", "分析師", "研究", "expert", "analyst"])
-
-    def _is_background_info(self, text: str) -> bool:
-        """檢查是否是背景資訊"""
-        return any(
-            word in text for word in ["背景", "歷史", "發展", "起源", "background", "history"]
-        )
-
-    def _extract_key_points(self, organized_content: Dict[str, Any]) -> List[str]:
-        """提取關鍵要點"""
-        key_points = []
-
-        # 從主要發現中提取
-        for finding in organized_content["main_findings"][:3]:
-            # 簡化為一句話
-            simplified = finding.split(".")[0][:100] + ("..." if len(finding) > 100 else "")
-            key_points.append(simplified)
-
-        # 從統計資訊中提取重要數據
-        for stat in organized_content["statistical_info"][:2]:
-            simplified = stat.split(".")[0][:100] + ("..." if len(stat) > 100 else "")
-            key_points.append(simplified)
-
-        # 確保至少有4個要點
-        while len(key_points) < 4:
-            if organized_content["supporting_evidence"]:
-                evidence = organized_content["supporting_evidence"][len(key_points) - 4]
-                simplified = evidence.split(".")[0][:100] + ("..." if len(evidence) > 100 else "")
-                key_points.append(simplified)
-            else:
-                key_points.append("需要更多資訊進行深入分析")
-                break
-
-        return key_points[:6]  # 限制為6個要點
-
-    def _generate_report_title(self, research_topic: str) -> str:
-        """生成報告標題"""
-        if self.current_locale == "zh-CN":
-            if "分析" not in research_topic and "研究" not in research_topic:
-                return f"{research_topic}深度分析報告"
-            else:
-                return research_topic
-        else:
-            if "analysis" not in research_topic.lower() and "report" not in research_topic.lower():
-                return f"{research_topic} Analysis Report"
-            else:
-                return research_topic
-
-    def _generate_overview(self, research_topic: str, organized_content: Dict[str, Any]) -> str:
-        """生成概述"""
-        if self.current_locale == "zh-CN":
-            overview = f"本報告針對「{research_topic}」進行了全面的研究和分析。"
-
-            if organized_content["background_info"]:
-                overview += f" 研究涵蓋了該主題的背景資訊、發展歷程和當前狀況。"
-
-            total_findings = sum(len(content) for content in organized_content.values())
-            overview += f" 本次研究收集了 {total_findings} 項相關資訊，"
-            overview += "從多個角度深入探討了相關議題，為讀者提供全面而深入的洞察。"
-
-        else:
-            overview = (
-                f"This report presents a comprehensive research and analysis of '{research_topic}'."
-            )
-
-            if organized_content["background_info"]:
-                overview += f" The research covers background information, development history, and current status of the topic."
-
-            total_findings = sum(len(content) for content in organized_content.values())
-            overview += f" This study collected {total_findings} relevant pieces of information, "
-            overview += "examining the subject from multiple perspectives to provide comprehensive insights for readers."
-
-        return overview
-
-    def _generate_detailed_analysis(self, organized_content: Dict[str, Any]) -> str:
-        """生成詳細分析"""
-        analysis = ""
-
-        if self.current_locale == "zh-CN":
-            sections = [
-                ("主要發現", organized_content["main_findings"]),
-                ("統計資訊", organized_content["statistical_info"]),
-                ("專家觀點", organized_content["expert_opinions"]),
-                ("背景資訊", organized_content["background_info"]),
-            ]
-        else:
-            sections = [
-                ("Key Findings", organized_content["main_findings"]),
-                ("Statistical Information", organized_content["statistical_info"]),
-                ("Expert Opinions", organized_content["expert_opinions"]),
-                ("Background Information", organized_content["background_info"]),
-            ]
-
-        for section_title, content_list in sections:
-            if content_list:
-                analysis += f"\n## {section_title}\n\n"
-
-                if len(content_list) > 3 and self.use_tables:
-                    # 如果內容較多，使用表格格式
-                    analysis += self._create_content_table(content_list)
-                else:
-                    # 使用清單格式
-                    for item in content_list:
-                        analysis += f"- {item}\n"
-
-                analysis += "\n"
-
-        return analysis
-
-    def _create_content_table(self, content_list: List[str]) -> str:
-        """創建內容表格"""
-        if self.current_locale == "zh-CN":
-            table = "| 項目 | 內容 |\n|------|------|\n"
-        else:
-            table = "| Item | Content |\n|------|------|\n"
-
-        for i, content in enumerate(content_list[:5], 1):
-            # 截斷過長的內容
-            truncated_content = content[:150] + ("..." if len(content) > 150 else "")
-            table += f"| {i} | {truncated_content} |\n"
-
-        return table + "\n"
-
-    def _generate_survey_note(self, organized_content: Dict[str, Any]) -> Optional[str]:
-        """生成調查說明"""
-        total_items = sum(len(content) for content in organized_content.values())
-
-        if total_items < 3:
-            return None  # 資訊太少，不需要調查說明
-
-        if self.current_locale == "zh-CN":
-            survey_note = f"""## 研究方法說明
-
-本研究採用多角度的資訊收集方法，包括：
-
-- **資料收集**: 從多個可靠來源收集了 {total_items} 項相關資訊
-- **分析方法**: 採用系統性的內容分析，將資訊按類型和重要性分類
-- **驗證過程**: 確保所有資訊來源的可靠性和時效性
-
-## 研究限制
-
-- 研究結果基於現有可取得的公開資訊
-- 部分資訊可能存在時效性限制
-- 建議讀者參考最新資料進行補充驗證
-
-## 後續建議
-
-- 定期更新相關資訊以保持研究的時效性
-- 可針對特定子主題進行更深入的專項研究
-- 建議結合實際應用場景進行案例分析"""
-
-        else:
-            survey_note = f"""## Research Methodology
-
-This research employed a multi-perspective information collection approach, including:
-
-- **Data Collection**: Collected {total_items} relevant pieces of information from multiple reliable sources
-- **Analysis Methods**: Used systematic content analysis to categorize information by type and importance
-- **Verification Process**: Ensured reliability and timeliness of all information sources
-
-## Research Limitations
-
-- Results are based on currently available public information
-- Some information may have temporal limitations
-- Readers are advised to refer to the latest data for supplementary verification
-
-## Future Recommendations
-
-- Regularly update relevant information to maintain research timeliness
-- Conduct more in-depth specialized research on specific sub-topics
-- Recommend combining with actual application scenarios for case analysis"""
-
-        return survey_note
-
-    def _extract_citations(self, observations: List[str]) -> List[str]:
-        """提取引用"""
-        citations = []
-
-        # 尋找URL模式
-        url_pattern = r"(https?://[^\s]+)"
-
-        for observation in observations:
-            urls = re.findall(url_pattern, observation)
-            for url in urls:
-                # 簡化的標題提取
-                title = f"資料來源 {len(citations) + 1}"
-                citations.append(f"[{title}]({url})")
-
-        # 如果沒有找到URL，添加一些範例引用
-        if not citations:
-            if self.current_locale == "zh-CN":
-                citations = [
-                    "[相關研究資料](https://example.com/research1)",
-                    "[專業分析報告](https://example.com/analysis1)",
-                    "[統計資料來源](https://example.com/statistics1)",
-                ]
-            else:
-                citations = [
-                    "[Related Research Data](https://example.com/research1)",
-                    "[Professional Analysis Report](https://example.com/analysis1)",
-                    "[Statistical Data Source](https://example.com/statistics1)",
-                ]
-
-        return citations[:10]  # 限制引用數量
-
-    def _extract_images(self, observations: List[str]) -> List[str]:
-        """提取圖片"""
-        images = []
-
-        # 尋找圖片URL模式
-        image_pattern = r"(https?://[^\s]+\.(?:jpg|jpeg|png|gif|webp|svg))"
-
-        for observation in observations:
-            img_urls = re.findall(image_pattern, observation, re.IGNORECASE)
-            images.extend(img_urls)
-
-        return list(set(images))[:5]  # 去重並限制數量
-
-    def _generate_metadata(
-        self, research_topic: str, research_plan: Dict[str, Any], locale: str
-    ) -> Dict[str, Any]:
-        """生成元資料"""
-        return {
-            "research_topic": research_topic,
-            "report_style": self.report_style.value,
-            "locale": locale,
-            "generation_time": datetime.now().isoformat(),
-            "plan_info": {
-                "title": research_plan.get("title", ""),
-                "steps_count": len(research_plan.get("steps", [])),
-                "has_enough_context": research_plan.get("has_enough_context", False),
+            survey_note="本報告為降級版本，存在技術限制。",
+            key_citations=[],
+            images=[],
+            metadata={
+                "generated_at": datetime.now().isoformat(),
+                "locale": locale,
+                "style": "fallback",
             },
-        }
-
-    def format_final_report(self, report: FinalReport) -> str:
-        """格式化最終報告"""
-        if self.current_locale == "zh-CN":
-            formatted_report = f"""# {report.title}
-
-## 關鍵要點
-
-"""
-            for point in report.key_points:
-                formatted_report += f"- {point}\n"
-
-            formatted_report += f"""
-
-## 概述
-
-{report.overview}
-
-{report.detailed_analysis}"""
-
-            if report.survey_note:
-                formatted_report += f"\n{report.survey_note}\n"
-
-            # 添加圖片
-            if report.images:
-                formatted_report += "\n## 相關圖片\n\n"
-                for i, img_url in enumerate(report.images, 1):
-                    formatted_report += f"![圖片 {i}]({img_url})\n\n"
-
-            formatted_report += "\n---\n\n## 關鍵引用\n\n"
-            for citation in report.key_citations:
-                formatted_report += f"- {citation}\n\n"
-
-        else:  # English
-            formatted_report = f"""# {report.title}
-
-## Key Points
-
-"""
-            for point in report.key_points:
-                formatted_report += f"- {point}\n"
-
-            formatted_report += f"""
-
-## Overview
-
-{report.overview}
-
-{report.detailed_analysis}"""
-
-            if report.survey_note:
-                formatted_report += f"\n{report.survey_note}\n"
-
-            # Add images
-            if report.images:
-                formatted_report += "\n## Related Images\n\n"
-                for i, img_url in enumerate(report.images, 1):
-                    formatted_report += f"![Image {i}]({img_url})\n\n"
-
-            formatted_report += "\n---\n\n## Key Citations\n\n"
-            for citation in report.key_citations:
-                formatted_report += f"- {citation}\n\n"
-
-        return formatted_report
-
-    def validate_report_completeness(self, report: FinalReport) -> Dict[str, Any]:
-        """驗證報告完整性"""
-        validation = {
-            "has_title": bool(report.title),
-            "has_key_points": len(report.key_points) >= 3,
-            "has_overview": bool(report.overview),
-            "has_detailed_analysis": bool(report.detailed_analysis),
-            "has_citations": len(report.key_citations) > 0,
-            "completeness_score": 0.0,
-        }
-
-        # 計算完整性分數
-        score = 0.0
-        if validation["has_title"]:
-            score += 0.2
-        if validation["has_key_points"]:
-            score += 0.3
-        if validation["has_overview"]:
-            score += 0.2
-        if validation["has_detailed_analysis"]:
-            score += 0.2
-        if validation["has_citations"]:
-            score += 0.1
-
-        validation["completeness_score"] = score
-        validation["is_complete"] = score >= 0.8
-
-        return validation
+        )

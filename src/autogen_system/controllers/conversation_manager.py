@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: MIT
 
 """
-AutoGen 對話管理器
+AutoGen 對話管理器 - 整合版本
 
 負責管理 AutoGen 智能體之間的對話流程和協作。
+使用新的 LedgerOrchestrator 進行工作流控制。
 """
 
 import asyncio
@@ -119,6 +120,7 @@ if AgentConfig is None:
 
 from src.logging import get_logger
 from ..agents import CoordinatorAgent, PlannerAgent, ResearcherAgent, CoderAgent, ReporterAgent
+from .ledger_orchestrator import LedgerOrchestrator
 
 logger = get_logger(__name__)
 
@@ -189,9 +191,10 @@ class ConversationState:
 
 class AutoGenConversationManager:
     """
-    AutoGen 對話管理器
+    AutoGen 對話管理器 - 整合版本
 
     管理多智能體對話流程，協調各智能體完成研究任務。
+    使用 LedgerOrchestrator 進行工作流控制。
     """
 
     def __init__(self, model_client: ChatCompletionClient, config: ConversationConfig = None):
@@ -209,6 +212,9 @@ class AutoGenConversationManager:
         self.conversation_state = ConversationState()
         self.workflow_handlers: Dict[WorkflowState, Callable] = {}
 
+        # 新增：LedgerOrchestrator 實例
+        self.ledger_orchestrator: Optional[LedgerOrchestrator] = None
+
         logger.info("AutoGen 對話管理器初始化")
 
     async def initialize_runtime(self):
@@ -224,6 +230,9 @@ class AutoGenConversationManager:
 
             # 設置工作流處理器
             self._setup_workflow_handlers()
+
+            # 新增：初始化 LedgerOrchestrator
+            await self._initialize_ledger_orchestrator()
 
             logger.info("AutoGen 運行時環境初始化完成")
 
@@ -243,7 +252,16 @@ class AutoGenConversationManager:
                 system_message="你是 DeerFlow，一個友善的AI助手。",
                 max_consecutive_auto_reply=1,
             )
-            self.agents["coordinator"] = CoordinatorAgent(coordinator_config)
+            # 為 CoordinatorAgent 創建 ChatCompletionClient
+            from ..adapters.llm_adapter import create_chat_client
+
+            coordinator_model_client = create_chat_client()
+
+            self.agents["coordinator"] = CoordinatorAgent(
+                name=coordinator_config.name,
+                model_client=coordinator_model_client,
+                description=coordinator_config.system_message,
+            )
             await self.runtime.register_and_start_agent(self.agents["coordinator"])
 
             # 創建計劃者智能體
@@ -306,6 +324,36 @@ class AutoGenConversationManager:
             WorkflowState.HUMAN_FEEDBACK: self._handle_human_feedback,
         }
 
+    async def _initialize_ledger_orchestrator(self):
+        """初始化 LedgerOrchestrator"""
+        try:
+            # 創建工作流配置
+            from ..config.workflow_config import WorkflowConfig
+
+            workflow_config = WorkflowConfig(
+                name="conversation_workflow",
+                workflow_type="research",
+                max_iterations=self.config.max_conversation_turns,
+                agents=list(self.agents.keys()),
+            )
+
+            # 創建 LedgerOrchestrator 實例
+            self.ledger_orchestrator = LedgerOrchestrator(
+                config=workflow_config,
+                agents=self.agents,
+                max_rounds=self.config.max_conversation_turns,
+                max_stalls_before_replan=3,
+                max_replans=3,
+                model_client=self.model_client,
+            )
+
+            logger.info("LedgerOrchestrator 初始化完成")
+
+        except Exception as e:
+            logger.error(f"初始化 LedgerOrchestrator 失敗: {e}")
+            # 如果初始化失敗，繼續使用舊的工作流處理器
+            logger.warning("將使用傳統工作流處理器")
+
     async def start_conversation(self, user_input: str) -> ConversationState:
         """
         開始新的對話
@@ -328,8 +376,13 @@ class AutoGenConversationManager:
             if not self.runtime:
                 await self.initialize_runtime()
 
-            # 開始工作流
-            await self._execute_workflow()
+            # 優先使用 LedgerOrchestrator
+            if self.ledger_orchestrator:
+                logger.info("使用 LedgerOrchestrator 執行工作流")
+                await self._execute_workflow_with_ledger(user_input)
+            else:
+                logger.info("使用傳統工作流處理器執行工作流")
+                await self._execute_workflow()
 
             return self.conversation_state
 
@@ -339,8 +392,80 @@ class AutoGenConversationManager:
             self.conversation_state.error_message = str(e)
             return self.conversation_state
 
+    async def _execute_workflow_with_ledger(self, user_input: str):
+        """使用 LedgerOrchestrator 執行工作流"""
+        try:
+            # 初始化任務
+            await self.ledger_orchestrator.initialize_task(user_input)
+
+            # 執行工作流
+            max_rounds = self.config.max_conversation_turns
+            round_count = 0
+
+            while round_count < max_rounds:
+                # 選擇下一個智能體
+                next_agent = await self.ledger_orchestrator.select_next_agent()
+
+                if next_agent is None:
+                    # 任務完成或達到限制
+                    logger.info("LedgerOrchestrator 工作流完成")
+                    self.conversation_state.workflow_state = WorkflowState.COMPLETED
+                    break
+
+                # 獲取智能體指令
+                if self.ledger_orchestrator.ledger_history:
+                    latest_ledger = self.ledger_orchestrator.ledger_history[-1]
+                    instruction = latest_ledger.instruction_or_question
+                else:
+                    instruction = f"請處理任務：{user_input}"
+
+                # 調用智能體
+                try:
+                    if hasattr(next_agent, "process_user_input"):
+                        # 使用 process_user_input 方法
+                        response = await next_agent.process_user_input(instruction)
+                        response_content = response.get("response", str(response))
+                    else:
+                        # 降級到傳統方法
+                        response_content = f"智能體 {next_agent.name} 回應：{instruction}"
+
+                    # 記錄智能體回應
+                    self.ledger_orchestrator.add_conversation_message(
+                        next_agent.name, response_content, "agent_response"
+                    )
+
+                    # 更新對話狀態
+                    self.conversation_state.execution_history.append(
+                        {
+                            "step": f"ledger_round_{round_count}",
+                            "agent": next_agent.name,
+                            "instruction": instruction,
+                            "response": response_content,
+                            "timestamp": datetime.now().isoformat(),
+                        }
+                    )
+
+                    logger.info(f"第 {round_count + 1} 輪完成，智能體：{next_agent.name}")
+
+                except Exception as e:
+                    logger.error(f"智能體 {next_agent.name} 執行失敗: {e}")
+                    self.ledger_orchestrator.add_conversation_message(
+                        "System", f"智能體執行失敗: {e}", "error"
+                    )
+
+                round_count += 1
+
+            # 更新最終狀態
+            if self.conversation_state.workflow_state != WorkflowState.COMPLETED:
+                self.conversation_state.workflow_state = WorkflowState.COMPLETED
+
+        except Exception as e:
+            logger.error(f"LedgerOrchestrator 工作流執行失敗: {e}")
+            self.conversation_state.workflow_state = WorkflowState.ERROR
+            self.conversation_state.error_message = str(e)
+
     async def _execute_workflow(self):
-        """執行工作流"""
+        """執行傳統工作流（向後兼容）"""
         max_iterations = self.config.max_conversation_turns
         iteration = 0
 
@@ -760,7 +885,7 @@ class AutoGenConversationManager:
 
     def get_conversation_summary(self) -> Dict[str, Any]:
         """獲取對話摘要"""
-        return {
+        summary = {
             "state": self.conversation_state.workflow_state.value,
             "user_input": self.conversation_state.user_input,
             "research_topic": self.conversation_state.research_topic,
@@ -775,6 +900,20 @@ class AutoGenConversationManager:
             "updated_at": self.conversation_state.updated_at.isoformat(),
             "execution_history_count": len(self.conversation_state.execution_history),
         }
+
+        # 添加 LedgerOrchestrator 狀態
+        if self.ledger_orchestrator:
+            try:
+                ledger_status = self.ledger_orchestrator.get_status()
+                summary["ledger_status"] = ledger_status
+                summary["using_ledger"] = True
+            except Exception as e:
+                logger.warning(f"獲取 LedgerOrchestrator 狀態失敗: {e}")
+                summary["using_ledger"] = False
+        else:
+            summary["using_ledger"] = False
+
+        return summary
 
 
 # 便利函數

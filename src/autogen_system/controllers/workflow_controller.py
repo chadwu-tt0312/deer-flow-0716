@@ -2,9 +2,10 @@
 # SPDX-License-Identifier: MIT
 
 """
-AutoGen 工作流控制器
+AutoGen 工作流控制器 - 整合版本
 
 為 AutoGen 提供複雜條件分支和流程控制邏輯，彌補其在複雜工作流方面的限制。
+支持與 LedgerOrchestrator 的整合。
 """
 
 import asyncio
@@ -15,6 +16,7 @@ from datetime import datetime
 from enum import Enum
 
 from src.logging import get_logger
+from .ledger_orchestrator import LedgerOrchestrator
 
 logger = get_logger(__name__)
 
@@ -119,23 +121,35 @@ class WorkflowPlan:
 
 class WorkflowController:
     """
-    工作流控制器
+    工作流控制器 - 整合版本
 
     提供複雜的條件分支、依賴管理、錯誤處理等工作流控制功能。
+    支持與 LedgerOrchestrator 的整合。
     """
 
-    def __init__(self):
-        """初始化工作流控制器"""
+    def __init__(self, ledger_orchestrator: Optional[LedgerOrchestrator] = None):
+        """
+        初始化工作流控制器
+
+        Args:
+            ledger_orchestrator: 可選的 LedgerOrchestrator 實例
+        """
         self.current_plan: Optional[WorkflowPlan] = None
         self.execution_context: Dict[str, Any] = {}
         self.step_handlers: Dict[StepType, Callable] = {}
         self.condition_evaluators: Dict[str, Callable] = {}
         self.execution_history: List[Dict[str, Any]] = []
 
+        # 新增：LedgerOrchestrator 整合
+        self.ledger_orchestrator = ledger_orchestrator
+        self.using_ledger = ledger_orchestrator is not None
+
         # 設置預設條件評估器
         self._setup_default_evaluators()
 
         logger.info("工作流控制器初始化完成")
+        if self.using_ledger:
+            logger.info("已整合 LedgerOrchestrator")
 
     def _setup_default_evaluators(self):
         """設置預設條件評估器"""
@@ -525,6 +539,45 @@ class WorkflowController:
 
         return results
 
+    def get_ledger_status(self) -> Optional[Dict[str, Any]]:
+        """獲取 LedgerOrchestrator 狀態"""
+        if self.ledger_orchestrator:
+            try:
+                return self.ledger_orchestrator.get_status()
+            except Exception as e:
+                logger.warning(f"獲取 LedgerOrchestrator 狀態失敗: {e}")
+                return None
+        return None
+
+    def is_using_ledger(self) -> bool:
+        """檢查是否使用 LedgerOrchestrator"""
+        return self.using_ledger
+
+    def sync_with_ledger(self):
+        """與 LedgerOrchestrator 同步狀態"""
+        if not self.ledger_orchestrator:
+            return
+
+        try:
+            ledger_status = self.ledger_orchestrator.get_status()
+
+            # 同步任務狀態
+            if ledger_status.get("task"):
+                self.execution_context["ledger_task"] = ledger_status["task"]
+
+            # 同步輪數
+            if ledger_status.get("round_count"):
+                self.execution_context["ledger_round_count"] = ledger_status["round_count"]
+
+            # 同步最新 Ledger 信息
+            if ledger_status.get("latest_ledger"):
+                self.execution_context["latest_ledger"] = ledger_status["latest_ledger"]
+
+            logger.info("已與 LedgerOrchestrator 同步狀態")
+
+        except Exception as e:
+            logger.warning(f"與 LedgerOrchestrator 同步失敗: {e}")
+
 
 # 便利函數
 def create_research_workflow_plan(
@@ -580,3 +633,77 @@ def create_research_workflow_plan(
         steps=steps,
         metadata={"topic": research_topic, "created_by": "workflow_controller"},
     )
+
+
+def create_workflow_controller_with_ledger(
+    ledger_orchestrator: LedgerOrchestrator,
+) -> WorkflowController:
+    """
+    創建整合了 LedgerOrchestrator 的工作流控制器
+
+    Args:
+        ledger_orchestrator: LedgerOrchestrator 實例
+
+    Returns:
+        WorkflowController: 整合版本的工作流控制器
+    """
+    controller = WorkflowController(ledger_orchestrator=ledger_orchestrator)
+
+    # 設置 LedgerOrchestrator 特定的條件評估器
+    controller.register_condition_evaluator(
+        "ledger_ready",
+        lambda context, condition: _evaluate_ledger_ready(controller, context, condition),
+    )
+
+    controller.register_condition_evaluator(
+        "ledger_step_completed",
+        lambda context, condition: _evaluate_ledger_step_completed(controller, context, condition),
+    )
+
+    logger.info("已創建整合 LedgerOrchestrator 的工作流控制器")
+    return controller
+
+
+def _evaluate_ledger_ready(
+    controller: WorkflowController, context: Dict[str, Any], condition: Dict[str, Any]
+) -> bool:
+    """評估 LedgerOrchestrator 是否準備就緒"""
+    if not controller.is_using_ledger():
+        return False
+
+    try:
+        ledger_status = controller.get_ledger_status()
+        if not ledger_status:
+            return False
+
+        # 檢查任務是否已初始化
+        return bool(ledger_status.get("task"))
+    except Exception:
+        return False
+
+
+def _evaluate_ledger_step_completed(
+    controller: WorkflowController, context: Dict[str, Any], condition: Dict[str, Any]
+) -> bool:
+    """評估 LedgerOrchestrator 的特定步驟是否完成"""
+    if not controller.is_using_ledger():
+        return False
+
+    try:
+        ledger_status = controller.get_ledger_status()
+        if not ledger_status:
+            return False
+
+        latest_ledger = ledger_status.get("latest_ledger")
+        if not latest_ledger:
+            return False
+
+        # 檢查步驟是否完成
+        step_name = condition.get("step_name", "")
+        if step_name:
+            return latest_ledger.get("current_step") == step_name
+
+        # 檢查是否有進展
+        return latest_ledger.get("is_progress_being_made", False)
+    except Exception:
+        return False

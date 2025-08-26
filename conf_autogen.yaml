@@ -114,6 +114,7 @@ BASIC_MODEL:
   api_version: $BASIC_MODEL__API_VERSION
   api_key: $BASIC_MODEL__API_KEY
   verify_ssl: false
+  model_type: "azure"
 
 REASONING_MODEL:
   model: $AZURE_DEPLOYMENT_NAME_4_1
@@ -122,6 +123,16 @@ REASONING_MODEL:
   api_version: $BASIC_MODEL__API_VERSION
   api_key: $REASONING_MODEL__API_KEY
   verify_ssl: false
+  model_type: "azure"
+
+# Use Azure Open AI with key (from AutoGen example)
+# provider: autogen_ext.models.openai.AzureOpenAIChatCompletionClient
+# config:
+#   model: $AZURE_DEPLOYMENT_NAME_4_1_MINI
+#   azure_endpoint: $AZURE_OPENAI_ENDPOINT
+#   azure_deployment: $AZURE_DEPLOYMENT_NAME_4_1_MINI
+#   api_version: $BASIC_MODEL__API_VERSION
+#   api_key: $BASIC_MODEL__API_KEY
 
 # 記錄設定
 LOGGING:

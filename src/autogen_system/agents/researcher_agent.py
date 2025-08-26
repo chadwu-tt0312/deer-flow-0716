@@ -2,22 +2,56 @@
 # SPDX-License-Identifier: MIT
 
 """
-研究者智能體
+研究者智能體 - AutoGen 框架版本
 
 負責執行網路搜尋、資訊收集和內容爬取任務。
-基於原有的 researcher_node 實現。
+基於 researcher_node 實現，使用 AutoGen 的 BaseChatAgent。
 """
 
 import re
+import json
+import logging
 from typing import Dict, Any, List, Optional, Callable
 from datetime import datetime
 from dataclasses import dataclass
 
-from .base_agent import BaseResearchAgent, AssistantResearchAgent
-from ..config.agent_config import AgentConfig, AgentRole
-from src.logging import get_logger
+# AutoGen 核心組件
+from autogen_core import CancellationToken
+from autogen_core.models import (
+    ChatCompletionClient,
+    SystemMessage,
+    UserMessage,
+    AssistantMessage,
+    LLMMessage,
+)
 
-logger = get_logger(__name__)
+# AutoGen AgentChat 基礎類
+from autogen_agentchat.agents import BaseChatAgent
+from autogen_agentchat.messages import TextMessage
+
+# 嘗試導入線程管理功能
+try:
+    from src.logging import (
+        setup_thread_logging,
+        set_thread_context,
+        get_current_thread_id,
+        get_current_thread_logger,
+    )
+
+    HAS_THREAD_LOGGING = True
+except ImportError:
+    HAS_THREAD_LOGGING = False
+
+# 嘗試導入提示模板功能
+try:
+    from src.prompts.template import apply_prompt_template
+    from src.config.configuration import Configuration
+
+    HAS_PROMPT_TEMPLATES = True
+except ImportError:
+    HAS_PROMPT_TEMPLATES = False
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -42,11 +76,11 @@ class ResearchFindings:
     images: List[str] = None
 
 
-class ResearcherAgent(AssistantResearchAgent):
+class ResearcherAgent(BaseChatAgent):
     """
-    研究者智能體
+    研究者智能體 - AutoGen 框架版本
 
-    角色職責：
+    基於 researcher_node 實現，角色職責：
     1. 進行網路搜尋和資訊收集
     2. 爬取特定 URL 的內容
     3. 使用本地知識庫搜尋
@@ -55,770 +89,513 @@ class ResearcherAgent(AssistantResearchAgent):
     6. 處理時間範圍約束
     """
 
+    def __init__(
+        self,
+        name: str,
+        model_client: ChatCompletionClient,
+        description: str = "研究者智能體 - 執行網路搜尋和資訊收集任務",
+        system_messages: Optional[List[SystemMessage]] = None,
+        tools: List[Callable] = None,
+    ):
+        """
+        初始化研究者智能體
+
+        Args:
+            name: 智能體名稱
+            model_client: ChatCompletionClient 實例
+            description: 智能體描述
+            system_messages: 系統消息列表
+            tools: 工具列表
+        """
+        super().__init__(name=name, description=description)
+
+        self._model_client = model_client
+        self._system_messages = system_messages or []
+        self._chat_history: List[LLMMessage] = []
+        self._tools = tools or []
+
+        # 線程管理
+        self._current_thread_id: Optional[str] = None
+        self._thread_logger = None
+
+        # 狀態管理
+        self._state: Dict[str, Any] = {}
+        self._configuration: Optional[Any] = None
+
+        # 兼容屬性
+        self.role = "researcher"
+        self.locale = "zh-TW"
+        self.max_results = 5
+
+        logger.info(f"ResearcherAgent 初始化完成: {name}")
+
     # 提示模板（基於原有的 researcher.md）
-    SYSTEM_MESSAGE = """你是由監督智能體管理的 `researcher` 智能體。
+    DEFAULT_SYSTEM_MESSAGE = """你是由監督智能體管理的 `researcher` 智能體。
 
-你致力於使用搜尋工具進行徹底調查，並透過系統性使用可用工具（包括內建工具和動態載入工具）提供全面解決方案。
+你的職責是使用搜尋工具進行全面的研究，以收集詳細和相關的資訊。你的任務將包括使用網路搜尋工具和爬取工具來收集資料，然後將這些資訊整理成一致、詳細的回應。
 
-# 可用工具
+## 核心職責
 
-你可以存取兩種類型的工具：
+1. **網路搜尋**: 使用提供的網路搜尋工具來尋找相關資訊
+2. **內容爬取**: 使用爬取工具來獲得特定網站或文件的詳細資訊
+3. **本地搜尋**: 當可用時，使用本地搜尋工具查詢特定的資料庫或知識庫
+4. **資訊整合**: 將來自多個來源的資訊整合成一致的回應
+5. **引用管理**: 適當地引用所有來源，並確保資訊的可追溯性
 
-1. **內建工具**：這些始終可用：
-   - **local_search_tool**：當用戶在訊息中提及時，用於從本地知識庫檢索資訊
-   - **web_search_tool**：用於執行網路搜尋
-   - **crawl_tool**：用於從 URL 讀取內容
+## 搜尋策略
 
-2. **動態載入工具**：根據配置可能可用的額外工具。這些工具會動態載入並出現在你的可用工具清單中。例如：
-   - 專業搜尋工具
-   - Google 地圖工具
-   - 資料庫檢索工具
-   - 以及許多其他工具
+- 開始進行廣泛搜尋以了解主題概況
+- 然後進行更具體的搜尋以獲得詳細資訊
+- 使用多個搜尋詞來確保全面性
+- 優先選擇權威和最新的來源
+- 交叉驗證來自多個來源的資訊
 
-## 如何使用動態載入工具
+## 輸出格式
 
-- **工具選擇**：為每個子任務選擇最合適的工具。在可用時優先選擇專業工具而非通用工具
-- **工具文件**：使用前仔細閱讀工具文件。注意必需參數和預期輸出
-- **錯誤處理**：如果工具返回錯誤，嘗試理解錯誤訊息並相應調整方法
-- **組合工具**：通常，最佳結果來自於組合多個工具
+確保你的回應：
+- 結構化且易於閱讀
+- 包含詳細的研究發現
+- 在回應末尾包含所有引用的來源列表
+- 使用適當的 Markdown 格式
+- 當呈現比較資料、統計資料或特徵時，優先使用表格格式
 
-# 步驟
+記住，你的目標是提供全面、準確和有用的資訊，幫助使用者充分了解他們詢問的主題。"""
 
-1. **理解問題**：忘記你之前的知識，仔細閱讀問題陳述以識別所需的關鍵資訊
-2. **評估可用工具**：注意你可用的所有工具，包括任何動態載入的工具
-3. **規劃解決方案**：確定使用可用工具解決問題的最佳方法
-4. **執行解決方案**：
-   - 忘記你之前的知識，所以你**應該利用工具**來檢索資訊
-   - 使用 **local_search_tool** 或 **web_search_tool** 或其他合適的搜尋工具
-   - 當任務包含時間範圍要求時，在查詢中納入適當的基於時間的搜尋參數
-   - 確保搜尋結果符合指定的時間約束
-   - 驗證來源的發布日期以確認它們在所需時間範圍內
-   - 當更適合特定任務時使用動態載入工具
-   - （可選）使用 **crawl_tool** 從必要的 URL 讀取內容
-5. **綜合資訊**：
-   - 結合從所有使用工具收集的資訊
-   - 確保回應清晰、簡潔並直接解決問題
-   - 追蹤並歸屬所有資訊來源及其各自的 URL 以供適當引用
-   - 在有幫助時包含來自收集資訊的相關圖片
+    def _setup_thread_context(self, thread_id: str):
+        """設置線程上下文和日誌"""
+        self._current_thread_id = thread_id
 
-# 輸出格式
+        if HAS_THREAD_LOGGING:
+            try:
+                self._thread_logger = setup_thread_logging(thread_id)
+                set_thread_context(thread_id)
 
-- 提供 markdown 格式的結構化回應
-- 包含以下章節：
-    - **問題陳述**：為了清晰重述問題
-    - **研究發現**：按主題而非使用的工具組織你的發現。對於每個主要發現：
-        - 總結關鍵資訊
-        - 追蹤資訊來源但不在文字中包含內聯引用
-        - 如果可用則包含相關圖片
-    - **結論**：基於收集的資訊對問題提供綜合回應
-    - **參考資料**：在文件末尾以連結參考格式列出所有使用的來源
-- 始終以指定的語言環境輸出
-- 不在文字中包含內聯引用。相反，追蹤所有來源並在末尾的參考資料章節中列出
+                if self._thread_logger:
+                    self._thread_logger.info("ResearcherAgent talking.")
+                else:
+                    logger.info("ResearcherAgent talking.")
+            except Exception as e:
+                logger.warning(f"線程日誌設置失敗，使用標準 logger: {e}")
+                self._thread_logger = logger
+                logger.info("ResearcherAgent talking.")
+        else:
+            self._thread_logger = logger
+            logger.info("ResearcherAgent talking.")
 
-# 注意事項
+    def _get_thread_id_from_context(
+        self, cancellation_token: Optional[CancellationToken] = None
+    ) -> str:
+        """從上下文獲取線程 ID"""
+        if self._current_thread_id:
+            return self._current_thread_id
 
-- 始終驗證收集資訊的相關性和可信度
-- 如果沒有提供 URL，僅專注於搜尋結果
-- 永不進行任何數學運算或檔案操作
-- 不嘗試與頁面互動。爬取工具只能用於爬取內容
-- 不執行任何數學計算
-- 不嘗試任何檔案操作
-- 只有在僅從搜尋結果無法獲得必要資訊時才調用 crawl_tool
-- 始終為所有資訊包含來源歸屬
-- 當提供來自多個來源的資訊時，清楚表明每條資訊來自哪個來源
-- 在單獨章節中使用格式包含圖片
-- 包含的圖片應**僅**來自**從搜尋結果或爬取內容**收集的資訊
-- 始終使用指定的語言環境進行輸出
-- 當任務中指定時間範圍要求時，嚴格遵守這些約束並驗證所有提供的資訊都在指定時間期間內"""
+        if HAS_THREAD_LOGGING:
+            try:
+                current_thread_id = get_current_thread_id()
+                if current_thread_id:
+                    return current_thread_id
+            except Exception:
+                pass
 
-    def __init__(self, config: AgentConfig, tools: List[Callable] = None, **kwargs):
-        """初始化研究者智能體"""
-        config.system_message = self.SYSTEM_MESSAGE
+        thread_id = f"researcher_thread_{datetime.now().strftime('%Y%m%d_%H%M%S_%f')}"
+        logger.debug(f"生成新線程 ID: {thread_id}")
+        return thread_id
 
-        # 設定研究者專用的工具
-        research_tools = tools or []
+    def _apply_dynamic_system_message(self, state: Dict[str, Any]) -> List[SystemMessage]:
+        """應用動態提示模板"""
+        if HAS_PROMPT_TEMPLATES:
+            try:
+                template_state = {
+                    "messages": state.get("messages", []),
+                    "locale": state.get("locale", "zh-TW"),
+                    "research_topic": state.get("research_topic", ""),
+                    **state,
+                }
 
-        super().__init__(config, research_tools, **kwargs)
+                if self._thread_logger:
+                    self._thread_logger.debug(f"模板狀態: {template_state}")
 
-        # 初始化研究參數
-        self.current_locale = "zh-CN"
-        self.max_search_results = 5
+                if self._configuration and HAS_PROMPT_TEMPLATES:
+                    if isinstance(self._configuration, dict):
+                        try:
+                            from src.config.configuration import Configuration
 
-        logger.info(f"研究者智能體初始化完成: {config.name}")
+                            config_obj = Configuration.from_runnable_config(
+                                {"configurable": self._configuration}
+                            )
+                            template_messages = apply_prompt_template(
+                                "researcher", template_state, config_obj
+                            )
+                        except Exception as config_error:
+                            if self._thread_logger:
+                                self._thread_logger.warning(
+                                    f"配置轉換失敗，使用無配置版本: {config_error}"
+                                )
+                            template_messages = apply_prompt_template("researcher", template_state)
+                    else:
+                        template_messages = apply_prompt_template(
+                            "researcher", template_state, self._configuration
+                        )
+                else:
+                    template_messages = apply_prompt_template("researcher", template_state)
 
-    def set_research_parameters(self, locale: str = "zh-CN", max_results: int = 5):
+                system_messages = []
+                for msg in template_messages:
+                    if isinstance(msg, dict) and msg.get("role") == "system":
+                        system_messages.append(SystemMessage(content=msg["content"]))
+
+                if system_messages:
+                    if self._thread_logger:
+                        self._thread_logger.info("成功應用動態提示模板")
+                    return system_messages
+
+            except Exception as e:
+                error_details = f"動態提示模板應用失敗: {type(e).__name__}: {str(e)}"
+                if self._thread_logger:
+                    self._thread_logger.warning(error_details)
+                else:
+                    logger.warning(error_details)
+
+        # 降級到預設系統消息
+        if self._thread_logger:
+            self._thread_logger.info("使用預設系統提示")
+        else:
+            logger.info("使用預設系統提示")
+
+        return [SystemMessage(content=self.DEFAULT_SYSTEM_MESSAGE)]
+
+    async def on_messages(
+        self, messages: List[TextMessage], cancellation_token: Optional[CancellationToken] = None
+    ) -> TextMessage:
+        """
+        處理輸入消息的主要方法（AutoGen 標準接口）
+        """
+        try:
+            if not messages:
+                return TextMessage(content="沒有收到消息", source=self.name)
+
+            latest_message = messages[-1]
+            user_input = (
+                latest_message.content
+                if hasattr(latest_message, "content")
+                else str(latest_message)
+            )
+
+            # 設置線程上下文
+            thread_id = self._get_thread_id_from_context(cancellation_token)
+            self._setup_thread_context(thread_id)
+
+            if self._thread_logger:
+                self._thread_logger.info(f"ResearcherAgent 開始處理研究任務: {user_input}")
+
+            # 調用研究邏輯
+            research_result = await self._conduct_research_with_llm(user_input, cancellation_token)
+
+            return TextMessage(content=research_result, source=self.name)
+
+        except Exception as e:
+            error_msg = f"處理研究任務失敗: {str(e)}"
+            logger.error(error_msg)
+
+            if self._thread_logger:
+                self._thread_logger.error(error_msg)
+
+            return TextMessage(content=f"抱歉，執行研究時出現錯誤：{str(e)}", source=self.name)
+
+    async def _conduct_research_with_llm(
+        self, user_input: str, cancellation_token: Optional[CancellationToken] = None
+    ) -> str:
+        """使用 LLM 進行研究"""
+        try:
+            # 更新狀態
+            self._state.update(
+                {
+                    "messages": [{"role": "user", "content": user_input}],
+                    "locale": self.locale,
+                    "research_topic": user_input.strip(),
+                }
+            )
+
+            # 準備動態系統消息
+            system_messages = self._apply_dynamic_system_message(self._state)
+
+            # 準備消息列表
+            messages = (
+                system_messages
+                + self._chat_history
+                + [UserMessage(content=user_input, source="user")]
+            )
+
+            if self._thread_logger:
+                self._thread_logger.info("調用 LLM API 進行研究...")
+
+            # 調用 LLM，如果有工具則綁定工具
+            if self._tools:
+                response = await self._model_client.create(
+                    messages=messages,
+                    tools=self._tools,
+                    cancellation_token=cancellation_token,
+                )
+            else:
+                response = await self._model_client.create(
+                    messages=messages,
+                    cancellation_token=cancellation_token,
+                )
+
+            response_content = response.content
+
+            if self._thread_logger:
+                self._thread_logger.info("LLM API 調用成功")
+                self._thread_logger.debug(f"LLM 回應: {response_content}")
+
+            return str(response_content)
+
+        except Exception as e:
+            if self._thread_logger:
+                self._thread_logger.error(f"LLM API 調用失敗: {e}")
+
+            # 降級到模擬研究
+            return await self._generate_fallback_research(user_input)
+
+    async def _generate_fallback_research(self, user_input: str) -> str:
+        """生成降級研究結果"""
+        if self._thread_logger:
+            self._thread_logger.info("使用降級研究生成")
+
+        return f"""# {user_input} 研究報告
+
+## 概述
+由於技術限制，無法進行完整的網路搜尋和資料收集。以下是基於一般知識的初步分析。
+
+## 建議研究方向
+1. **基礎概念**: 了解{user_input}的基本定義和核心概念
+2. **應用領域**: 探索{user_input}在各個領域的應用情況
+3. **發展趨勢**: 分析{user_input}的未來發展方向和潛在機會
+
+## 注意事項
+此報告為降級版本，建議使用完整的搜尋工具進行更深入的研究。
+
+## 參考資料
+- 需要進一步的網路搜尋和資料收集
+"""
+
+    def set_research_parameters(self, locale: str = "zh-TW", max_results: int = 5):
         """設定研究參數"""
-        self.current_locale = locale
-        self.max_search_results = max_results
-        logger.info(f"研究參數更新: locale={locale}, max_results={max_results}")
+        self.locale = locale
+        self.max_results = max_results
+        if self._thread_logger:
+            self._thread_logger.info(f"研究參數更新: locale={locale}, max_results={max_results}")
+        else:
+            logger.info(f"研究參數更新: locale={locale}, max_results={max_results}")
 
+    def set_configuration(self, configuration: Any):
+        """設置配置對象"""
+        self._configuration = configuration
+
+        if self._thread_logger:
+            self._thread_logger.info(f"配置已更新: {type(configuration).__name__}")
+        else:
+            logger.info(f"配置已更新: {type(configuration).__name__}")
+
+    def get_role_info(self) -> Dict[str, Any]:
+        """取得角色資訊（兼容 BaseResearchAgent 接口）"""
+        return {
+            "name": self.name,
+            "description": self.description,
+            "role": "researcher",
+            "tools": [
+                tool.__name__ if hasattr(tool, "__name__") else str(tool) for tool in self._tools
+            ],
+            "config": None,
+        }
+
+    async def process_user_input(self, user_input: str) -> Dict[str, Any]:
+        """
+        處理用戶輸入（兼容 BaseResearchAgent 接口）
+
+        Args:
+            user_input: 用戶輸入的內容
+
+        Returns:
+            Dict[str, Any]: 包含回應的字典
+        """
+        try:
+            # 設置線程上下文
+            thread_id = self._get_thread_id_from_context()
+            self._setup_thread_context(thread_id)
+
+            # 進行研究
+            research_result = await self._conduct_research_with_llm(user_input)
+
+            return {
+                "response": research_result,
+                "locale": self.locale,
+                "status": "success",
+            }
+
+        except Exception as e:
+            if self._thread_logger:
+                self._thread_logger.error(f"處理用戶輸入失敗: {e}")
+            else:
+                logger.error(f"處理用戶輸入失敗: {e}")
+
+            return {
+                "response": f"抱歉，進行研究時發生錯誤：{str(e)}",
+                "locale": self.locale,
+                "status": "error",
+            }
+
+    # 實現 BaseChatAgent 的抽象方法
+    async def on_reset(self) -> None:
+        """處理重置事件"""
+        self._chat_history.clear()
+        self._state.clear()
+        self._current_thread_id = None
+        self._thread_logger = None
+
+    @property
+    def produced_message_types(self) -> List[type]:
+        """返回此智能體產生的消息類型"""
+        return [TextMessage]
+
+    # 兼容方法 - 保留舊接口
     async def conduct_research(
         self,
         research_task: str,
-        locale: str = "zh-CN",
+        locale: str = "zh-TW",
         resources: List[str] = None,
         time_range: str = None,
     ) -> ResearchFindings:
         """
-        執行研究任務
+        進行研究（兼容舊接口）
 
         Args:
-            research_task: 研究任務描述
-            locale: 語言環境
-            resources: 資源列表（URL 或檔案）
-            time_range: 時間範圍約束
+            research_task: 研究任務
+            locale: 語言設定
+            resources: 資源列表
+            time_range: 時間範圍
 
         Returns:
-            ResearchFindings: 研究結果
+            ResearchFindings: 研究發現
         """
-        logger.info(f"開始執行研究任務: {research_task}")
+        try:
+            # 設置參數
+            self.set_research_parameters(locale)
 
-        self.set_research_parameters(locale, self.max_search_results)
+            # 建構研究輸入
+            research_input = f"# 研究任務\n{research_task}\n"
+            if resources:
+                research_input += f"\n# 可用資源\n" + "\n".join(f"- {res}" for res in resources)
+            if time_range:
+                research_input += f"\n# 時間範圍\n{time_range}\n"
 
-        # 解析研究任務
-        research_plan = self._parse_research_task(research_task)
+            # 進行研究
+            research_result = await self._conduct_research_with_llm(research_input)
 
-        # 執行搜尋
-        search_results = await self._execute_search(research_plan, time_range)
+            # 解析結果為 ResearchFindings
+            return self._parse_research_result(research_task, research_result)
 
-        # 如果有指定資源，進行本地搜尋或爬取
-        if resources:
-            local_results = await self._search_local_resources(research_plan, resources)
-            search_results.extend(local_results)
+        except Exception as e:
+            logger.error(f"進行研究失敗: {e}")
+            # 返回降級結果
+            return self._create_fallback_research_findings(research_task, locale)
 
-        # 整合結果
-        findings = self._synthesize_findings(research_task, search_results)
-
-        logger.info(f"研究任務完成: {len(search_results)} 個結果")
-        return findings
-
-    def _parse_research_task(self, task: str) -> Dict[str, Any]:
-        """解析研究任務"""
-        # 提取關鍵詞
-        keywords = self._extract_keywords(task)
-
-        # 判斷任務類型
-        task_type = self._classify_task_type(task)
-
-        # 提取時間約束
-        time_constraints = self._extract_time_constraints(task)
-
-        return {
-            "original_task": task,
-            "keywords": keywords,
-            "task_type": task_type,
-            "time_constraints": time_constraints,
-            "search_queries": self._generate_search_queries(task, keywords),
-        }
-
-    def _extract_keywords(self, task: str) -> List[str]:
-        """提取關鍵詞"""
-        # 簡單的關鍵詞提取邏輯
-        # 實際實現可以使用更複雜的 NLP 技術
-
-        # 移除常見停用詞
-        stop_words = {"的", "是", "在", "了", "和", "與", "或", "但", "然而", "因為", "所以"}
-
-        # 分詞（簡化版本）
-        words = re.findall(r"\b\w+\b", task)
-        keywords = [word for word in words if word not in stop_words and len(word) > 1]
-
-        return keywords[:10]  # 限制關鍵詞數量
-
-    def _classify_task_type(self, task: str) -> str:
-        """分類任務類型"""
-        task_lower = task.lower()
-
-        if any(word in task_lower for word in ["程式", "代碼", "code", "programming"]):
-            return "technical"
-        elif any(word in task_lower for word in ["市場", "趨勢", "分析", "market", "trend"]):
-            return "market_analysis"
-        elif any(word in task_lower for word in ["歷史", "發展", "history", "development"]):
-            return "historical"
-        else:
-            return "general"
-
-    def _extract_time_constraints(self, task: str) -> Optional[Dict[str, str]]:
-        """提取時間約束"""
-        # 尋找時間相關的表達
-        time_patterns = [
-            r"(\d{4})年",
-            r"(\d{4})-(\d{4})",
-            r"最近(\d+)年",
-            r"過去(\d+)年",
-            r"近年來",
-            r"最新",
-            r"當前",
+    def _parse_research_result(self, research_task: str, research_result: str) -> ResearchFindings:
+        """解析研究結果"""
+        # 簡化解析 - 在實際實現中可以更複雜
+        findings = [
+            {
+                "type": "research_result",
+                "content": research_result,
+                "timestamp": datetime.now().isoformat(),
+            }
         ]
 
-        for pattern in time_patterns:
-            match = re.search(pattern, task)
-            if match:
-                return {"type": "time_range", "value": match.group()}
-
-        return None
-
-    def _generate_search_queries(self, task: str, keywords: List[str]) -> List[str]:
-        """生成搜尋查詢"""
-        queries = []
-
-        # 主要查詢
-        queries.append(task)
-
-        # 基於關鍵詞的查詢
-        if len(keywords) >= 2:
-            queries.append(" ".join(keywords[:3]))
-
-        # 特定類型的查詢
-        if "最佳實務" in task or "best practice" in task.lower():
-            queries.append(f"{keywords[0]} 最佳實務")
-
-        if "趨勢" in task or "trend" in task.lower():
-            queries.append(f"{keywords[0]} 趨勢 2024")
-
-        return queries[:3]  # 限制查詢數量
-
-    async def _execute_search(
-        self, research_plan: Dict[str, Any], time_range: str = None
-    ) -> List[SearchResult]:
-        """執行搜尋"""
-        results = []
-
-        for query in research_plan["search_queries"]:
-            # 添加時間範圍到查詢
-            if time_range:
-                query = f"{query} {time_range}"
-
-            # 調用真正的搜尋工具
-            search_results = await self._perform_web_search(query)
-            results.extend(search_results)
-
-        return results
-
-    async def _perform_web_search(self, query: str) -> List[SearchResult]:
-        """執行真正的網路搜尋"""
-        search_results = []
-
-        try:
-            # 檢查是否有可用的搜尋工具
-            search_tool = None
-            for tool_name in ["web_search", "autogen_web_search", "tavily_search"]:
-                if hasattr(self, "tools") and tool_name in [
-                    getattr(tool, "__name__", "") for tool in self.tools
-                ]:
-                    search_tool = next(
-                        (tool for tool in self.tools if getattr(tool, "__name__", "") == tool_name),
-                        None,
-                    )
-                    break
-
-            if search_tool:
-                logger.info(f"使用搜尋工具執行查詢: {query}")
-                # 調用搜尋工具
-                raw_result = await search_tool(query=query, max_results=self.max_search_results)
-
-                # 解析搜尋結果
-                search_results = self._parse_search_results(raw_result, query)
-            else:
-                logger.warning("未找到可用的搜尋工具，使用模擬結果")
-                search_results = await self._simulate_web_search(query)
-
-        except Exception as e:
-            logger.error(f"搜尋執行失敗: {e}")
-            # 失敗時返回模擬結果
-            search_results = await self._simulate_web_search(query)
-
-        logger.info(f"搜尋查詢 '{query}' 返回 {len(search_results)} 個結果")
-        return search_results
-
-    def _parse_search_results(self, raw_result: str, query: str) -> List[SearchResult]:
-        """解析搜尋工具返回的結果"""
-        results = []
-
-        try:
-            import json
-
-            # 嘗試解析 JSON 格式的結果
-            if isinstance(raw_result, str):
-                try:
-                    parsed = json.loads(raw_result)
-                except json.JSONDecodeError:
-                    # 如果不是 JSON，將其作為純文字處理
-                    results.append(
-                        SearchResult(
-                            title=f"搜尋結果: {query}",
-                            url="",
-                            content=raw_result,
-                            source="搜尋引擎",
-                            timestamp=datetime.now(),
-                        )
-                    )
-                    return results
-            else:
-                parsed = raw_result
-
-            # 處理不同格式的搜尋結果
-            if isinstance(parsed, dict):
-                # 處理包含 results 的格式
-                if "results" in parsed:
-                    search_items = parsed["results"]
-                else:
-                    search_items = [parsed]
-
-                for item in search_items:
-                    if isinstance(item, dict):
-                        results.append(
-                            SearchResult(
-                                title=item.get("title", f"搜尋結果"),
-                                url=item.get("url", ""),
-                                content=item.get("content", item.get("snippet", "")),
-                                source=item.get("source", "搜尋引擎"),
-                                timestamp=datetime.now(),
-                            )
-                        )
-
-            elif isinstance(parsed, list):
-                for item in parsed:
-                    if isinstance(item, dict):
-                        results.append(
-                            SearchResult(
-                                title=item.get("title", f"搜尋結果"),
-                                url=item.get("url", ""),
-                                content=item.get("content", item.get("snippet", "")),
-                                source=item.get("source", "搜尋引擎"),
-                                timestamp=datetime.now(),
-                            )
-                        )
-
-        except Exception as e:
-            logger.error(f"解析搜尋結果失敗: {e}")
-            # 解析失敗時創建基本結果
-            results.append(
-                SearchResult(
-                    title=f"搜尋結果: {query}",
-                    url="",
-                    content=str(raw_result),
-                    source="搜尋引擎",
-                    timestamp=datetime.now(),
-                )
-            )
-
-        return results
-
-    async def _simulate_web_search(self, query: str) -> List[SearchResult]:
-        """模擬網路搜尋（備用方法）"""
-        mock_results = []
-
-        for i in range(min(3, self.max_search_results)):
-            mock_results.append(
-                SearchResult(
-                    title=f"關於 {query} 的搜尋結果 {i + 1}",
-                    url=f"https://example.com/search_{i + 1}",
-                    content=f"這是關於 {query} 的詳細資訊。包含了相關的背景知識、技術細節和實際應用案例。",
-                    source="模擬搜尋引擎",
-                    timestamp=datetime.now(),
-                )
-            )
-
-        logger.info(f"模擬搜尋查詢 '{query}' 返回 {len(mock_results)} 個結果")
-        return mock_results
-
-    async def _search_local_resources(
-        self, research_plan: Dict[str, Any], resources: List[str]
-    ) -> List[SearchResult]:
-        """搜尋本地資源"""
-        results = []
-
-        for resource in resources:
-            if resource.startswith("http"):
-                # URL 資源，使用爬取工具
-                result = await self._crawl_url(resource, research_plan["keywords"])
-                if result:
-                    results.append(result)
-            elif resource.startswith("rag://"):
-                # 本地知識庫資源
-                result = await self._search_local_knowledge(resource, research_plan["keywords"])
-                if result:
-                    results.append(result)
-
-        return results
-
-    async def _crawl_url(self, url: str, keywords: List[str]) -> Optional[SearchResult]:
-        """爬取 URL 內容"""
-        logger.info(f"爬取 URL: {url}")
-
-        try:
-            # 檢查是否有可用的爬蟲工具
-            crawl_tool = None
-            for tool_name in ["crawl_tool", "autogen_crawl"]:
-                if hasattr(self, "tools") and tool_name in [
-                    getattr(tool, "__name__", "") for tool in self.tools
-                ]:
-                    crawl_tool = next(
-                        (tool for tool in self.tools if getattr(tool, "__name__", "") == tool_name),
-                        None,
-                    )
-                    break
-
-            if crawl_tool:
-                logger.info(f"使用爬蟲工具爬取: {url}")
-                # 調用爬蟲工具
-                raw_result = await crawl_tool(url=url)
-
-                # 解析爬蟲結果
-                return self._parse_crawl_result(raw_result, url)
-            else:
-                logger.warning("未找到可用的爬蟲工具，使用模擬結果")
-                return self._simulate_crawl_result(url, keywords)
-
-        except Exception as e:
-            logger.error(f"爬蟲執行失敗: {e}")
-            # 失敗時返回模擬結果
-            return self._simulate_crawl_result(url, keywords)
-
-    def _parse_crawl_result(self, raw_result: str, url: str) -> SearchResult:
-        """解析爬蟲工具返回的結果"""
-        try:
-            import json
-
-            # 嘗試解析 JSON 格式的結果
-            if isinstance(raw_result, str):
-                try:
-                    parsed = json.loads(raw_result)
-                    if isinstance(parsed, dict):
-                        title = parsed.get("title", f"爬取自 {url} 的內容")
-                        content = parsed.get("content", parsed.get("crawled_content", raw_result))
-                    else:
-                        title = f"爬取自 {url} 的內容"
-                        content = raw_result
-                except json.JSONDecodeError:
-                    title = f"爬取自 {url} 的內容"
-                    content = raw_result
-            else:
-                title = f"爬取自 {url} 的內容"
-                content = str(raw_result)
-
-            return SearchResult(
-                title=title,
-                url=url,
-                content=content,
-                source="網頁爬取",
-                timestamp=datetime.now(),
-            )
-
-        except Exception as e:
-            logger.error(f"解析爬蟲結果失敗: {e}")
-            return SearchResult(
-                title=f"爬取自 {url} 的內容",
-                url=url,
-                content=str(raw_result),
-                source="網頁爬取",
-                timestamp=datetime.now(),
-            )
-
-    def _simulate_crawl_result(self, url: str, keywords: List[str]) -> SearchResult:
-        """模擬爬蟲結果"""
-        return SearchResult(
-            title=f"爬取自 {url} 的內容",
-            url=url,
-            content=f"這是從 {url} 爬取的內容，包含與 {', '.join(keywords)} 相關的詳細資訊。",
-            source="網頁爬取",
-            timestamp=datetime.now(),
-        )
-
-    async def _search_local_knowledge(
-        self, resource: str, keywords: List[str]
-    ) -> Optional[SearchResult]:
-        """搜尋本地知識庫（模擬實現）"""
-        logger.info(f"搜尋本地知識庫: {resource}")
-
-        # 模擬本地搜尋結果
-        return SearchResult(
-            title=f"本地知識庫搜尋結果",
-            url=resource,
-            content=f"這是從本地知識庫檢索的關於 {', '.join(keywords)} 的資訊。",
-            source="本地知識庫",
-            timestamp=datetime.now(),
-        )
-
-    def _synthesize_findings(
-        self, original_task: str, search_results: List[SearchResult]
-    ) -> ResearchFindings:
-        """整合研究發現"""
-        # 按來源組織發現
-        findings_by_source = {}
-        for result in search_results:
-            if result.source not in findings_by_source:
-                findings_by_source[result.source] = []
-            findings_by_source[result.source].append(result)
-
-        # 生成發現列表
-        findings = []
-        for source, results in findings_by_source.items():
-            finding = {
-                "source": source,
-                "summary": f"從 {source} 收集到 {len(results)} 條相關資訊",
-                "key_points": [result.title for result in results],
-                "details": [result.content for result in results],
-            }
-            findings.append(finding)
-
-        # 生成結論
-        conclusion = self._generate_conclusion(original_task, search_results)
-
-        # 收集參考資料
-        references = list(set([result.url for result in search_results]))
+        # 提取引用（簡化版本）
+        references = []
+        for line in research_result.split("\n"):
+            if line.strip().startswith("- [") and "](http" in line:
+                references.append(line.strip())
 
         return ResearchFindings(
-            problem_statement=original_task,
+            problem_statement=research_task,
             findings=findings,
-            conclusion=conclusion,
+            conclusion="研究完成，詳細結果請參考以上內容。",
             references=references,
-            images=[],  # 實際實現中會從搜尋結果中提取圖片
+            images=[],
         )
 
-    def _generate_conclusion(self, task: str, results: List[SearchResult]) -> str:
-        """生成結論"""
-        if not results:
-            return f"針對 '{task}' 的研究未能找到足夠的資訊。建議調整搜尋策略或擴大搜尋範圍。"
+    def _create_fallback_research_findings(
+        self, research_task: str, locale: str
+    ) -> ResearchFindings:
+        """創建降級研究發現"""
+        findings = [
+            {
+                "type": "fallback",
+                "content": f"由於技術限制，無法完成對「{research_task}」的完整研究。建議使用完整的搜尋工具進行更深入的調查。",
+                "timestamp": datetime.now().isoformat(),
+            }
+        ]
 
-        total_sources = len(set([result.source for result in results]))
-
-        conclusion = f"""基於對 '{task}' 的研究，我們從 {total_sources} 個不同來源收集了 {len(results)} 條相關資訊。
-
-主要發現包括：
-- 收集到的資訊涵蓋了該主題的多個面向
-- 不同來源提供了不同的觀點和深度
-- 資訊的時效性和可靠性需要進一步驗證
-
-建議後續步驟：
-1. 對收集的資訊進行深入分析
-2. 驗證關鍵資料點的準確性
-3. 尋找更多專業來源進行補充研究"""
-
-        return conclusion
-
-    def format_research_report(self, findings: ResearchFindings, locale: str = "zh-CN") -> str:
-        """格式化研究報告"""
-        if locale == "zh-CN":
-            report = f"""# 研究報告
-
-## 問題陳述
-{findings.problem_statement}
-
-## 研究發現
-"""
-            for finding in findings.findings:
-                report += f"""
-### {finding["source"]}
-{finding["summary"]}
-
-**關鍵要點：**
-"""
-                for point in finding["key_points"]:
-                    report += f"- {point}\n"
-
-                report += "\n"
-
-            report += f"""## 結論
-{findings.conclusion}
-
-## 參考資料
-"""
-            for ref in findings.references:
-                report += f"- [{ref}]({ref})\n\n"
-
-        else:  # English
-            report = f"""# Research Report
-
-## Problem Statement
-{findings.problem_statement}
-
-## Research Findings
-"""
-            for finding in findings.findings:
-                report += f"""
-### {finding["source"]}
-{finding["summary"]}
-
-**Key Points:**
-"""
-                for point in finding["key_points"]:
-                    report += f"- {point}\n"
-
-                report += "\n"
-
-            report += f"""## Conclusion
-{findings.conclusion}
-
-## References
-"""
-            for ref in findings.references:
-                report += f"- [{ref}]({ref})\n\n"
-
-        return report
+        return ResearchFindings(
+            problem_statement=research_task,
+            findings=findings,
+            conclusion="需要進一步的研究工具支持。",
+            references=[],
+            images=[],
+        )
 
     async def investigate_topic(self, research_topic: str) -> str:
-        """
-        調查研究主題（用於背景調查階段）
-
-        Args:
-            research_topic: 研究主題
-
-        Returns:
-            str: 調查結果
-        """
-        logger.info(f"開始調查主題: {research_topic}")
-
-        try:
-            # 進行背景搜尋
-            search_results = await self._perform_web_search(research_topic)
-
-            if not search_results:
-                return f"未找到關於 '{research_topic}' 的相關資訊"
-
-            # 整理調查結果
-            investigation_summary = []
-            investigation_summary.append(f"# 主題調查: {research_topic}\n")
-
-            for i, result in enumerate(search_results[:3], 1):  # 取前3個結果
-                investigation_summary.append(f"## 資料來源 {i}: {result.title}")
-                investigation_summary.append(f"**來源：** {result.source}")
-                if result.url:
-                    investigation_summary.append(f"**網址：** {result.url}")
-                investigation_summary.append(f"**內容摘要：**")
-                investigation_summary.append(
-                    result.content[:500] + "..." if len(result.content) > 500 else result.content
-                )
-                investigation_summary.append("")
-
-            investigation_summary.append(
-                f"**調查時間：** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            )
-
-            return "\n".join(investigation_summary)
-
-        except Exception as e:
-            logger.error(f"主題調查失敗: {e}")
-            return f"主題調查過程中發生錯誤: {str(e)}"
+        """調查主題（兼容舊接口）"""
+        result = await self._conduct_research_with_llm(f"請深入調查以下主題：{research_topic}")
+        return result
 
     async def execute_research_step(self, step_input: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        執行研究步驟（用於工作流執行階段）
-
-        Args:
-            step_input: 步驟輸入
-
-        Returns:
-            Dict[str, Any]: 執行結果
-        """
-        logger.info("執行研究步驟")
-
+        """執行研究步驟（兼容舊接口）"""
         try:
-            description = step_input.get("description", "")
-            inputs = step_input.get("inputs", {})
-            context = step_input.get("context", {})
+            step_description = step_input.get("description", "")
+            step_title = step_input.get("title", "研究步驟")
 
-            # 提取研究查詢
-            research_query = inputs.get("topic") or context.get("research_topic") or description
-            max_results = inputs.get("max_results", self.max_search_results)
+            research_input = f"# {step_title}\n{step_description}"
 
-            # 執行搜尋
-            search_results = await self._perform_web_search(research_query)
+            result = await self._conduct_research_with_llm(research_input)
 
-            # 如果有 URL 爬取需求
-            urls_to_crawl = inputs.get("urls", [])
-            crawl_results = []
-            for url in urls_to_crawl:
-                crawl_result = await self._crawl_url(url, [research_query])
-                if crawl_result:
-                    crawl_results.append(crawl_result)
-
-            # 整理結果
             return {
-                "research_query": research_query,
-                "search_results": [
-                    {"title": r.title, "url": r.url, "content": r.content, "source": r.source}
-                    for r in search_results
-                ],
-                "crawl_results": [
-                    {"title": r.title, "url": r.url, "content": r.content, "source": r.source}
-                    for r in crawl_results
-                ],
-                "total_results": len(search_results) + len(crawl_results),
-                "execution_time": datetime.now().isoformat(),
+                "step_title": step_title,
+                "result": result,
+                "status": "completed",
+                "timestamp": datetime.now().isoformat(),
             }
 
         except Exception as e:
-            logger.error(f"研究步驟執行失敗: {e}")
-            return {"error": str(e), "execution_time": datetime.now().isoformat()}
+            return {
+                "step_title": step_input.get("title", "研究步驟"),
+                "result": f"執行失敗：{str(e)}",
+                "status": "failed",
+                "timestamp": datetime.now().isoformat(),
+            }
 
     async def analyze_research_data(self, analysis_input: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        分析研究資料
-
-        Args:
-            analysis_input: 分析輸入
-
-        Returns:
-            Dict[str, Any]: 分析結果
-        """
-        logger.info("分析研究資料")
-
+        """分析研究資料（兼容舊接口）"""
         try:
-            description = analysis_input.get("description", "")
-            inputs = analysis_input.get("inputs", {})
-            context = analysis_input.get("context", {})
-            analysis_type = analysis_input.get("analysis_type", "basic")
+            data = analysis_input.get("data", "")
+            analysis_type = analysis_input.get("analysis_type", "general")
 
-            # 從上下文中獲取研究資料
-            research_data = context.get("step_initial_research_result", {})
-            search_results = research_data.get("search_results", [])
-            crawl_results = research_data.get("crawl_results", [])
+            analysis_prompt = f"# 資料分析任務\n分析類型：{analysis_type}\n\n資料內容：\n{data}"
 
-            if not search_results and not crawl_results:
-                return {"analysis": "無可分析的研究資料", "insights": [], "recommendations": []}
+            result = await self._conduct_research_with_llm(analysis_prompt)
 
-            # 進行分析
-            all_content = []
-            for result in search_results + crawl_results:
-                all_content.append(result.get("content", ""))
-
-            combined_content = " ".join(all_content)
-
-            # 基本分析
-            analysis_result = {
-                "content_length": len(combined_content),
-                "source_count": len(search_results) + len(crawl_results),
+            return {
                 "analysis_type": analysis_type,
-                "key_insights": self._extract_insights(combined_content),
-                "content_summary": combined_content[:1000] + "..."
-                if len(combined_content) > 1000
-                else combined_content,
-                "execution_time": datetime.now().isoformat(),
+                "result": result,
+                "status": "completed",
+                "timestamp": datetime.now().isoformat(),
             }
 
-            return analysis_result
-
         except Exception as e:
-            logger.error(f"研究資料分析失敗: {e}")
-            return {"error": str(e), "execution_time": datetime.now().isoformat()}
-
-    def _extract_insights(self, content: str) -> List[str]:
-        """從內容中提取關鍵洞察"""
-        insights = []
-
-        # 簡單的關鍵詞分析
-        keywords = ["趨勢", "增長", "下降", "發展", "創新", "挑戰", "機會", "影響"]
-        sentences = content.split("。")
-
-        for sentence in sentences:
-            for keyword in keywords:
-                if keyword in sentence and len(sentence.strip()) > 10:
-                    insights.append(sentence.strip() + "。")
-                    break
-
-            if len(insights) >= 5:  # 最多提取5個洞察
-                break
-
-        return insights
+            return {
+                "analysis_type": analysis_input.get("analysis_type", "general"),
+                "result": f"分析失敗：{str(e)}",
+                "status": "failed",
+                "timestamp": datetime.now().isoformat(),
+            }

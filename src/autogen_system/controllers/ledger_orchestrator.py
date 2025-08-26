@@ -2,21 +2,75 @@
 # SPDX-License-Identifier: MIT
 
 """
-基於 Ledger 的工作流編排器
+基於 Ledger 的工作流編排器 - 整合版本
 
 參考 AutoGen Magentic One 的 LedgerOrchestrator 實現，
 提供智能的工作流編排和智能體選擇機制。
+支持 AutoGen 框架和模板檔案。
 """
 
 import json
 import asyncio
-from typing import Dict, List, Any, Optional, Union
+import re
+from typing import Dict, List, Any, Optional, Union, Tuple
 from datetime import datetime, timedelta
 from dataclasses import dataclass, field
+
+# AutoGen 核心模型
+try:
+    from autogen_core.models import (
+        SystemMessage,
+        UserMessage,
+        AssistantMessage,
+        LLMMessage,
+        ChatCompletionClient,
+    )
+    from autogen_core import CancellationToken
+    from autogen_agentchat.messages import TextMessage
+    from autogen_agentchat.agents import BaseChatAgent
+
+    HAS_AUTOGEN = True
+except ImportError:
+    # 降級到基本類型
+    ChatCompletionClient = type("MockChatCompletionClient", (), {})
+    CancellationToken = type("MockCancellationToken", (), {})
+    TextMessage = type("MockTextMessage", (), {})
+    BaseChatAgent = type("MockBaseChatAgent", (), {})
+    HAS_AUTOGEN = False
 
 from ..config.agent_config import AgentRole, WorkflowConfig
 from ..agents.base_agent import BaseResearchAgent
 from src.logging import get_logger
+from src.prompts.template import env
+
+# 嘗試導入線程管理功能
+try:
+    from src.logging import (
+        setup_thread_logging,
+        set_thread_context,
+        get_current_thread_id,
+        get_current_thread_logger,
+    )
+
+    HAS_THREAD_LOGGING = True
+except ImportError:
+    HAS_THREAD_LOGGING = False
+
+# 嘗試導入配置功能
+try:
+    from src.config.configuration import Configuration
+
+    HAS_CONFIGURATION = True
+except ImportError:
+    HAS_CONFIGURATION = False
+
+# 導入 Command 系統
+try:
+    from ..core.command import AutoGenCommand, CommandHandler, parse_flow_control_to_command
+
+    HAS_COMMAND_SYSTEM = True
+except ImportError:
+    HAS_COMMAND_SYSTEM = False
 
 logger = get_logger(__name__)
 
@@ -36,120 +90,148 @@ class LedgerEntry:
     completed_steps: List[str] = field(default_factory=list)
     facts_learned: List[str] = field(default_factory=list)
 
+    # AutoGen 特定字段
+    flow_control_info: Dict[str, Any] = field(default_factory=dict)
+    message_metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class WorkflowResult:
+    """工作流執行結果"""
+
+    success: bool
+    final_message: Optional[Union[str, TextMessage]] = None
+    error_message: str = ""
+    total_rounds: int = 0
+    completed_steps: List[str] = field(default_factory=list)
+    facts_learned: List[str] = field(default_factory=list)
+
 
 class LedgerOrchestrator:
     """
-    基於 Ledger 的研究工作流編排器
+    基於 Ledger 的研究工作流編排器 - 整合版本
 
     參考 AutoGen Magentic One 的設計模式，使用 JSON 格式的 Ledger
     來追蹤任務進度並選擇下一個發言的智能體。
+    支持 AutoGen 框架和模板檔案。
     """
 
-    # Prompt 模板
-    SYSTEM_MESSAGE = """你是一個智能的工作流編排器，負責協調多個智能體完成研究任務。
+    def _get_system_message_template(self) -> str:
+        """取得系統消息模板"""
+        template = env.get_template("ledger_orchestrator.md")
+        return template.render(CURRENT_TIME=datetime.now().strftime("%a %b %d %Y %H:%M:%S %z"))
 
-你的職責：
-1. 分析當前任務進度和對話歷史
-2. 判斷任務是否完成或遇到問題
-3. 選擇下一個最適合的智能體
-4. 提供清晰的指令或問題
+    def _apply_ledger_template(self, **kwargs) -> str:
+        """應用 Ledger 分析模板"""
+        try:
+            template = env.get_template("ledger_orchestrator.md")
+            # 從模板中提取 Ledger Analysis 部分
+            full_template = template.render(
+                CURRENT_TIME=datetime.now().strftime("%a %b %d %Y %H:%M:%S %z"), **kwargs
+            )
 
-你必須以 JSON 格式回應，包含以下欄位：
-- is_request_satisfied: 任務是否已完成 (boolean)
-- is_in_loop: 是否陷入循環 (boolean) 
-- is_progress_being_made: 是否有進展 (boolean)
-- next_speaker: 下一個發言者名稱 (string)
-- instruction_or_question: 給下一個發言者的指令或問題 (string)
-- reasoning: 決策理由 (string)
-- current_step: 當前執行步驟 (string)
-- completed_steps: 已完成步驟列表 (array)
-- facts_learned: 已學到的事實列表 (array)"""
+            # 提取 Ledger Analysis Template 部分
+            lines = full_template.split("\n")
+            in_ledger_section = False
+            ledger_lines = []
 
-    LEDGER_PROMPT = """# 任務分析和智能體選擇
+            for line in lines:
+                if "## Ledger Analysis Template" in line:
+                    in_ledger_section = True
+                    continue
+                elif in_ledger_section and line.startswith("## ") and "Ledger Analysis" not in line:
+                    break
+                elif in_ledger_section:
+                    ledger_lines.append(line)
 
-## 當前任務
-{task}
+            return "\n".join(ledger_lines)
+        except Exception as e:
+            raise ValueError(f"應用 ledger 模板失敗: {e}")
 
-## 可用智能體團隊
-{team_description}
+    def _apply_plan_template(self, **kwargs) -> str:
+        """應用計劃創建模板"""
+        try:
+            template = env.get_template("ledger_orchestrator.md")
+            full_template = template.render(
+                CURRENT_TIME=datetime.now().strftime("%a %b %d %Y %H:%M:%S %z"), **kwargs
+            )
 
-## 對話歷史
-{conversation_history}
+            # 提取 Plan Creation Template 部分
+            lines = full_template.split("\n")
+            in_plan_section = False
+            plan_lines = []
 
-請分析當前狀況並決定下一步行動。考慮：
-1. 任務是否已經完成？
-2. 是否陷入重複循環？
-3. 是否在取得進展？
-4. 哪個智能體最適合處理下一步？
-5. 應該給該智能體什麼具體指令？
+            for line in lines:
+                if "## Plan Creation Template" in line:
+                    in_plan_section = True
+                    continue
+                elif in_plan_section and line.startswith("## ") and "Plan Creation" not in line:
+                    break
+                elif in_plan_section:
+                    plan_lines.append(line)
 
-智能體名稱選項：{agent_names}
+            return "\n".join(plan_lines)
+        except Exception as e:
+            raise ValueError(f"應用計劃模板失敗: {e}")
 
-回應格式：JSON"""
+    def _apply_facts_update_template(self, **kwargs) -> str:
+        """應用事實更新模板"""
+        try:
+            template = env.get_template("ledger_orchestrator.md")
+            full_template = template.render(
+                CURRENT_TIME=datetime.now().strftime("%a %b %d %Y %H:%M:%S %z"), **kwargs
+            )
 
-    PLAN_PROMPT = """# 制定執行計劃
+            # 提取 Facts Update Template 部分
+            lines = full_template.split("\n")
+            in_facts_section = False
+            facts_lines = []
 
-## 任務
-{task}
+            for line in lines:
+                if "## Facts Update Template" in line:
+                    in_facts_section = True
+                    continue
+                elif in_facts_section and line.startswith("## ") and "Facts Update" not in line:
+                    break
+                elif in_facts_section:
+                    facts_lines.append(line)
 
-## 可用智能體
-{team_description}
-
-## 已知事實
-{facts}
-
-請為這個任務制定一個詳細的執行計劃。計劃應該：
-1. 分解任務為具體步驟
-2. 指定每個步驟的負責智能體
-3. 考慮步驟間的依賴關係
-4. 預估完成時間
-
-回應格式：文字描述"""
-
-    FACTS_UPDATE_PROMPT = """# 更新事實資訊
-
-## 原始任務
-{task}
-
-## 目前已知事實
-{current_facts}
-
-## 最新對話內容
-{recent_conversation}
-
-基於最新的對話內容，請更新和補充已知事實。只包含確實可靠的資訊。
-
-回應格式：文字描述"""
+            return "\n".join(facts_lines)
+        except Exception as e:
+            raise ValueError(f"應用事實更新模板失敗: {e}")
 
     def __init__(
         self,
         config: WorkflowConfig,
-        agents: Dict[str, BaseResearchAgent],
+        agents: Union[Dict[str, BaseResearchAgent], Dict[str, BaseChatAgent]],
         max_rounds: int = 20,
         max_stalls_before_replan: int = 3,
         max_replans: int = 3,
+        model_client: Optional[ChatCompletionClient] = None,
     ):
         """
         初始化編排器
 
         Args:
             config: 工作流配置
-            agents: 智能體字典
+            agents: 智能體字典（支持 BaseResearchAgent 和 BaseChatAgent）
             max_rounds: 最大輪數
             max_stalls_before_replan: 重新規劃前的最大停滯次數
             max_replans: 最大重新規劃次數
+            model_client: AutoGen ChatCompletionClient（可選）
         """
         self.config = config
         self.agents = agents
         self.max_rounds = max_rounds
         self.max_stalls_before_replan = max_stalls_before_replan
         self.max_replans = max_replans
+        self.model_client = model_client
 
         # 狀態追蹤
         self.task = ""
         self.facts = ""
         self.plan = ""
-        self.conversation_history: List[Dict[str, Any]] = []
+        self.conversation_history: List[Union[Dict[str, Any], TextMessage]] = []
         self.ledger_history: List[LedgerEntry] = []
 
         # 控制變數
@@ -158,14 +240,55 @@ class LedgerOrchestrator:
         self.replan_counter = 0
         self.should_replan = False
 
+        # 線程管理
+        self._current_thread_id: Optional[str] = None
+        self._thread_logger = None
+
+        # Command 系統
+        self.command_handler = CommandHandler() if HAS_COMMAND_SYSTEM else None
+        self.current_command: Optional[AutoGenCommand] = None
+
+        # 檢測智能體類型
+        self._is_autogen_system = HAS_AUTOGEN and any(
+            isinstance(agent, BaseChatAgent) for agent in agents.values()
+        )
+
         logger.info(f"初始化 LedgerOrchestrator: {config.name}")
+        if self._is_autogen_system:
+            logger.info("檢測到 AutoGen 智能體，啟用 AutoGen 模式")
+        else:
+            logger.info("使用傳統智能體模式")
+
+    def _setup_thread_context(self, thread_id: str):
+        """設置線程上下文"""
+        self._current_thread_id = thread_id
+
+        if HAS_THREAD_LOGGING:
+            try:
+                self._thread_logger = setup_thread_logging(thread_id)
+                set_thread_context(thread_id)
+
+                if self._thread_logger:
+                    self._thread_logger.info(f"LedgerOrchestrator 線程上下文設置完成: {thread_id}")
+
+            except Exception as e:
+                logger.warning(f"線程日誌設置失敗，使用標準 logger: {e}")
+                self._thread_logger = logger
+        else:
+            self._thread_logger = logger
 
     def get_team_description(self) -> str:
         """取得團隊描述"""
         descriptions = []
         for agent_name, agent in self.agents.items():
-            role_info = agent.get_role_info()
-            descriptions.append(f"{agent_name}: {role_info['description']}")
+            if self._is_autogen_system and hasattr(agent, "description"):
+                # AutoGen 智能體
+                description = getattr(agent, "description", "智能體")
+            else:
+                # 傳統智能體
+                role_info = agent.get_role_info()
+                description = role_info.get("description", "智能體")
+            descriptions.append(f"{agent_name}: {description}")
         return "\n".join(descriptions)
 
     def get_agent_names(self) -> List[str]:
@@ -173,14 +296,23 @@ class LedgerOrchestrator:
         return list(self.agents.keys())
 
     def add_conversation_message(self, sender: str, content: str, message_type: str = "message"):
-        """添加對話消息"""
-        message = {
-            "timestamp": datetime.now(),
-            "sender": sender,
-            "content": content,
-            "type": message_type,
-        }
-        self.conversation_history.append(message)
+        """添加對話消息（兼容兩種模式）"""
+        if self._is_autogen_system:
+            # AutoGen 模式
+            message = TextMessage(content=content, source=sender)
+            self.conversation_history.append(message)
+        else:
+            # 傳統模式
+            message = {
+                "timestamp": datetime.now(),
+                "sender": sender,
+                "content": content,
+                "type": message_type,
+            }
+            self.conversation_history.append(message)
+
+        if self._thread_logger:
+            self._thread_logger.debug(f"添加消息: {sender} -> {content[:100]}...")
 
     def get_recent_conversation(self, last_n: int = 5) -> str:
         """取得最近的對話內容"""
@@ -192,14 +324,66 @@ class LedgerOrchestrator:
 
         formatted_messages = []
         for msg in recent_messages:
-            formatted_messages.append(f"[{msg['sender']}]: {msg['content']}")
+            if self._is_autogen_system and isinstance(msg, TextMessage):
+                # AutoGen 消息
+                source = getattr(msg, "source", "Unknown")
+                content = getattr(msg, "content", str(msg))
+                formatted_messages.append(f"[{source}]: {content}")
+            else:
+                # 傳統消息
+                formatted_messages.append(f"[{msg['sender']}]: {msg['content']}")
 
         return "\n".join(formatted_messages)
 
-    async def initialize_task(self, task: str):
+    def extract_flow_control_info(
+        self, message: Union[Dict[str, Any], TextMessage]
+    ) -> Dict[str, Any]:
+        """
+        從智能體消息中提取流程控制信息
+        """
+        flow_info = {}
+
+        try:
+            if self._is_autogen_system and isinstance(message, TextMessage):
+                # AutoGen 消息
+                # 檢查是否有 metadata 屬性
+                if hasattr(message, "metadata") and message.metadata:
+                    flow_info = message.metadata
+
+                # 檢查內容中是否有 [FLOW_CONTROL] 標記
+                elif hasattr(message, "content") and "[FLOW_CONTROL]" in message.content:
+                    pattern = r"\[FLOW_CONTROL\](.*?)\[/FLOW_CONTROL\]"
+                    matches = re.findall(pattern, message.content, re.DOTALL)
+
+                    if matches:
+                        try:
+                            flow_info = json.loads(matches[0])
+                        except json.JSONDecodeError as e:
+                            if self._thread_logger:
+                                self._thread_logger.warning(f"流程控制信息解析失敗: {e}")
+            else:
+                # 傳統消息
+                if isinstance(message, dict) and "flow_control" in message:
+                    flow_info = message["flow_control"]
+
+        except Exception as e:
+            if self._thread_logger:
+                self._thread_logger.warning(f"提取流程控制信息失敗: {e}")
+
+        return flow_info
+
+    async def initialize_task(self, task: str, thread_id: Optional[str] = None):
         """初始化任務"""
         self.task = task
-        logger.info(f"初始化任務: {task}")
+
+        # 設置線程上下文
+        if thread_id:
+            self._setup_thread_context(thread_id)
+
+        if self._thread_logger:
+            self._thread_logger.info(f"初始化任務: {task}")
+        else:
+            logger.info(f"初始化任務: {task}")
 
         # 收集初始事實
         self.facts = await self._gather_initial_facts(task)
@@ -212,7 +396,10 @@ class LedgerOrchestrator:
         self.add_conversation_message("Orchestrator", f"初始事實: {self.facts}", "facts")
         self.add_conversation_message("Orchestrator", f"執行計劃: {self.plan}", "plan")
 
-        logger.info("任務初始化完成")
+        if self._thread_logger:
+            self._thread_logger.info("任務初始化完成")
+        else:
+            logger.info("任務初始化完成")
 
     async def _gather_initial_facts(self, task: str) -> str:
         """收集初始事實（簡化版本）"""
@@ -223,6 +410,21 @@ class LedgerOrchestrator:
     async def _create_initial_plan(self, task: str) -> str:
         """創建初始計劃（簡化版本）"""
         # 在實際實現中，這裡會調用 LLM 生成詳細計劃
+        # 現在使用模板生成計劃提示，但仍返回簡化版本
+        team_description = self.get_team_description()
+        facts = await self._gather_initial_facts(task)
+
+        # 生成計劃模板（供未來 LLM 調用使用）
+        plan_prompt = self._apply_plan_template(
+            task=task, team_description=team_description, facts=facts
+        )
+
+        if self._thread_logger:
+            self._thread_logger.debug(f"計劃提示模板已生成: {len(plan_prompt)} 字符")
+        else:
+            logger.debug(f"計劃提示模板已生成: {len(plan_prompt)} 字符")
+
+        # 目前返回簡化版本的計劃
         return f"""執行計劃:
 1. 協調者分析任務需求
 2. 計劃者制定詳細執行步驟  
@@ -235,7 +437,7 @@ class LedgerOrchestrator:
         analysis = {"key_points": [], "status": "unknown", "next_requirements": [], "summary": ""}
 
         # 根據智能體類型分析回應內容
-        if agent_name == "CoordinatorAgent":
+        if agent_name == "coordinator":
             # 分析協調者的回應
             if "研究" in response_content or "分析" in response_content:
                 analysis["status"] = "analysis_complete"
@@ -244,7 +446,7 @@ class LedgerOrchestrator:
                 analysis["status"] = "planning_ready"
                 analysis["next_requirements"].append("需要制定詳細執行計劃")
 
-        elif agent_name == "PlannerAgent":
+        elif agent_name == "planner":
             # 分析計劃者的回應
             if "步驟" in response_content or "計劃" in response_content:
                 analysis["status"] = "plan_ready"
@@ -253,7 +455,7 @@ class LedgerOrchestrator:
             if "研究" in response_content:
                 analysis["key_points"].append("研究策略已確定")
 
-        elif agent_name == "ResearcherAgent":
+        elif agent_name == "researcher":
             # 分析研究者的回應
             if "發現" in response_content or "資料" in response_content:
                 analysis["status"] = "research_complete"
@@ -262,14 +464,14 @@ class LedgerOrchestrator:
             if "程式" in response_content or "代碼" in response_content:
                 analysis["next_requirements"].append("需要程式碼分析")
 
-        elif agent_name == "CoderAgent":
+        elif agent_name == "coder":
             # 分析程式設計師的回應
             if "分析" in response_content or "處理" in response_content:
                 analysis["status"] = "code_analysis_complete"
                 analysis["key_points"].append("程式碼分析已完成")
                 analysis["next_requirements"].append("需要生成綜合報告")
 
-        elif agent_name == "ReporterAgent":
+        elif agent_name == "reporter":
             # 分析報告者的回應
             if "報告" in response_content or "完成" in response_content:
                 analysis["status"] = "report_complete"
@@ -283,14 +485,12 @@ class LedgerOrchestrator:
 
     async def update_ledger(self) -> LedgerEntry:
         """更新 Ledger 狀態"""
-        max_retries = 3
-
         # 準備 prompt
         team_description = self.get_team_description()
         agent_names = self.get_agent_names()
         conversation_history = self.get_recent_conversation(10)
 
-        ledger_prompt = self.LEDGER_PROMPT.format(
+        ledger_prompt = self._apply_ledger_template(
             task=self.task,
             team_description=team_description,
             conversation_history=conversation_history,
@@ -316,9 +516,15 @@ class LedgerOrchestrator:
         )
 
         self.ledger_history.append(ledger_entry)
-        logger.info(
-            f"Ledger 更新: {ledger_entry.next_speaker} - {ledger_entry.instruction_or_question}"
-        )
+
+        if self._thread_logger:
+            self._thread_logger.info(
+                f"Ledger 更新: {ledger_entry.next_speaker} - {ledger_entry.instruction_or_question}"
+            )
+        else:
+            logger.info(
+                f"Ledger 更新: {ledger_entry.next_speaker} - {ledger_entry.instruction_or_question}"
+            )
 
         return ledger_entry
 
@@ -334,7 +540,7 @@ class LedgerOrchestrator:
                 "is_request_satisfied": False,
                 "is_in_loop": False,
                 "is_progress_being_made": True,
-                "next_speaker": "CoordinatorAgent",
+                "next_speaker": "coordinator",  # 使用配置中的智能體鍵名
                 "instruction_or_question": f"請分析以下研究任務並確定執行方向: {self.task}",
                 "reasoning": "任務剛開始，需要協調者進行初始分析",
                 "current_step": "任務協調",
@@ -344,13 +550,20 @@ class LedgerOrchestrator:
 
         # 檢查最近的消息確定下一步
         last_message = self.conversation_history[-1]
-        last_sender = last_message["sender"]
-        last_content = last_message["content"]
+
+        if self._is_autogen_system and isinstance(last_message, TextMessage):
+            # AutoGen 消息
+            last_sender = getattr(last_message, "source", "Unknown")
+            last_content = getattr(last_message, "content", str(last_message))
+        else:
+            # 傳統消息
+            last_sender = last_message["sender"]
+            last_content = last_message["content"]
 
         # 分析最後一個智能體的回應內容
         response_analysis = self._analyze_agent_response(last_sender, last_content)
 
-        if last_sender == "CoordinatorAgent":
+        if last_sender == "coordinator":
             # 基於協調者的回應內容生成指令
             if response_analysis["status"] == "analysis_complete":
                 instruction = "基於協調者的分析，請制定詳細的執行計劃，包括具體的研究步驟和時間安排"
@@ -363,15 +576,16 @@ class LedgerOrchestrator:
                 "is_request_satisfied": False,
                 "is_in_loop": False,
                 "is_progress_being_made": True,
-                "next_speaker": "PlannerAgent",
+                "next_speaker": "planner",  # 使用配置中的智能體鍵名
                 "instruction_or_question": instruction,
                 "reasoning": f"協調完成：{response_analysis['summary']}",
+                "instructions": "基於協調者的分析，請制定詳細的執行計劃",
                 "current_step": "計劃制定",
                 "completed_steps": ["任務協調"],
                 "facts_learned": response_analysis["key_points"],
             }
 
-        elif last_sender == "PlannerAgent":
+        elif last_sender == "planner":
             # 基於計劃者的回應內容生成指令
             if response_analysis["status"] == "plan_ready":
                 instruction = "請根據制定的計劃開始收集相關資訊和進行研究，確保按照計劃的步驟執行"
@@ -382,7 +596,7 @@ class LedgerOrchestrator:
                 "is_request_satisfied": False,
                 "is_in_loop": False,
                 "is_progress_being_made": True,
-                "next_speaker": "ResearcherAgent",
+                "next_speaker": "researcher",  # 使用配置中的智能體鍵名
                 "instruction_or_question": instruction,
                 "reasoning": f"計劃已制定：{response_analysis['summary']}",
                 "current_step": "資訊收集",
@@ -391,7 +605,7 @@ class LedgerOrchestrator:
                 + response_analysis["key_points"],
             }
 
-        elif last_sender == "ResearcherAgent":
+        elif last_sender == "researcher":
             # 基於研究者的回應內容生成指令
             research_summary = f"基於研究者的發現：{last_content[:100]}..."
 
@@ -402,7 +616,7 @@ class LedgerOrchestrator:
                     "is_request_satisfied": False,
                     "is_in_loop": False,
                     "is_progress_being_made": True,
-                    "next_speaker": "CoderAgent",
+                    "next_speaker": "coder",  # 使用配置中的智能體鍵名
                     "instruction_or_question": instruction,
                     "reasoning": f"研究完成，需要技術分析：{response_analysis['summary']}",
                     "current_step": "程式碼分析",
@@ -416,7 +630,7 @@ class LedgerOrchestrator:
                     "is_request_satisfied": False,
                     "is_in_loop": False,
                     "is_progress_being_made": True,
-                    "next_speaker": "ReporterAgent",
+                    "next_speaker": "reporter",  # 使用配置中的智能體鍵名
                     "instruction_or_question": instruction,
                     "reasoning": f"研究完成，可以生成報告：{response_analysis['summary']}",
                     "current_step": "報告生成",
@@ -425,7 +639,7 @@ class LedgerOrchestrator:
                     + response_analysis["key_points"],
                 }
 
-        elif last_sender == "CoderAgent":
+        elif last_sender == "coder":
             # 基於程式設計師的回應內容生成指令
             code_analysis = f"基於程式碼分析結果：{last_content[:100]}..."
             instruction = f"{code_analysis} 請整合研究結果和程式碼分析，生成最終報告"
@@ -434,7 +648,7 @@ class LedgerOrchestrator:
                 "is_request_satisfied": False,
                 "is_in_loop": False,
                 "is_progress_being_made": True,
-                "next_speaker": "ReporterAgent",
+                "next_speaker": "reporter",  # 使用配置中的智能體鍵名
                 "instruction_or_question": instruction,
                 "reasoning": f"技術分析完成，需要生成綜合報告：{response_analysis['summary']}",
                 "current_step": "報告生成",
@@ -448,7 +662,7 @@ class LedgerOrchestrator:
                 + response_analysis["key_points"],
             }
 
-        elif last_sender == "ReporterAgent":
+        elif last_sender == "reporter":
             return {
                 "is_request_satisfied": True,
                 "is_in_loop": False,
@@ -473,7 +687,7 @@ class LedgerOrchestrator:
             "is_request_satisfied": False,
             "is_in_loop": False,
             "is_progress_being_made": True,
-            "next_speaker": "CoordinatorAgent",
+            "next_speaker": "coordinator",  # 使用配置中的智能體鍵名
             "instruction_or_question": "請繼續協調任務進展",
             "reasoning": "需要協調者介入",
             "current_step": "協調中",
@@ -481,13 +695,16 @@ class LedgerOrchestrator:
             "facts_learned": [],
         }
 
-    async def select_next_agent(self) -> Optional[BaseResearchAgent]:
+    async def select_next_agent(self) -> Optional[Union[BaseResearchAgent, BaseChatAgent]]:
         """選擇下一個智能體"""
         self.round_count += 1
 
         # 檢查輪數限制
         if self.round_count > self.max_rounds:
-            logger.warning("達到最大輪數限制")
+            if self._thread_logger:
+                self._thread_logger.warning("達到最大輪數限制")
+            else:
+                logger.warning("達到最大輪數限制")
             return None
 
         # 更新 Ledger
@@ -495,7 +712,10 @@ class LedgerOrchestrator:
 
         # 任務完成
         if ledger_entry.is_request_satisfied:
-            logger.info("任務已完成")
+            if self._thread_logger:
+                self._thread_logger.info("任務已完成")
+            else:
+                logger.info("任務已完成")
             return None
 
         # 檢查是否停滯或循環
@@ -514,15 +734,29 @@ class LedgerOrchestrator:
             next_agent = self.agents[next_agent_name]
 
             # 記錄指令
-            self.add_conversation_message(
-                "Orchestrator",
-                f"指令給 {next_agent_name}: {ledger_entry.instruction_or_question}",
-                "instruction",
-            )
+            if self._is_autogen_system:
+                instruction_message = TextMessage(
+                    content=f"指令給 {next_agent_name}: {ledger_entry.instruction_or_question}",
+                    source="Orchestrator",
+                )
+                self.add_conversation_message(
+                    "Orchestrator",
+                    f"指令給 {next_agent_name}: {ledger_entry.instruction_or_question}",
+                    "instruction",
+                )
+            else:
+                self.add_conversation_message(
+                    "Orchestrator",
+                    f"指令給 {next_agent_name}: {ledger_entry.instruction_or_question}",
+                    "instruction",
+                )
 
             return next_agent
 
-        logger.warning(f"找不到智能體: {next_agent_name}")
+        if self._thread_logger:
+            self._thread_logger.warning(f"找不到智能體: {next_agent_name}")
+        else:
+            logger.warning(f"找不到智能體: {next_agent_name}")
         return None
 
     async def _handle_replan(self):
@@ -530,10 +764,16 @@ class LedgerOrchestrator:
         self.replan_counter += 1
 
         if self.replan_counter > self.max_replans:
-            logger.warning("超過最大重新規劃次數，終止任務")
+            if self._thread_logger:
+                self._thread_logger.warning("超過最大重新規劃次數，終止任務")
+            else:
+                logger.warning("超過最大重新規劃次數，終止任務")
             return
 
-        logger.info(f"第 {self.replan_counter} 次重新規劃")
+        if self._thread_logger:
+            self._thread_logger.info(f"第 {self.replan_counter} 次重新規劃")
+        else:
+            logger.info(f"第 {self.replan_counter} 次重新規劃")
 
         # 更新事實和計劃
         await self._update_facts_and_plan()
@@ -542,22 +782,54 @@ class LedgerOrchestrator:
         self.stall_counter = 0
 
         # 記錄重新規劃
-        self.add_conversation_message("Orchestrator", f"重新規劃 #{self.replan_counter}", "replan")
-        self.add_conversation_message("Orchestrator", f"更新後的計劃: {self.plan}", "plan")
+        if self._is_autogen_system:
+            replan_message = TextMessage(
+                content=f"重新規劃 #{self.replan_counter}：檢測到工作流停滯，重新評估任務進展",
+                source="Orchestrator",
+            )
+            self.add_conversation_message(
+                "Orchestrator", f"重新規劃 #{self.replan_counter}", "replan"
+            )
+        else:
+            self.add_conversation_message(
+                "Orchestrator", f"重新規劃 #{self.replan_counter}", "replan"
+            )
+            self.add_conversation_message("Orchestrator", f"更新後的計劃: {self.plan}", "plan")
 
     async def _update_facts_and_plan(self):
         """更新事實和計劃"""
         # 更新事實
         recent_conversation = self.get_recent_conversation(10)
+
+        # 生成事實更新模板（供未來 LLM 調用使用）
+        facts_update_prompt = self._apply_facts_update_template(
+            task=self.task, current_facts=self.facts, recent_conversation=recent_conversation
+        )
+
+        if self._thread_logger:
+            self._thread_logger.debug(f"事實更新提示模板已生成: {len(facts_update_prompt)} 字符")
+        else:
+            logger.debug(f"事實更新提示模板已生成: {len(facts_update_prompt)} 字符")
+
         # 這裡應該調用 LLM 更新事實，現在簡化處理
         self.facts += f"\n更新的事實（基於最新對話）: {recent_conversation}"
 
         # 更新計劃
+        team_description = self.get_team_description()
+        plan_update_prompt = self._apply_plan_template(
+            task=self.task, team_description=team_description, facts=self.facts
+        )
+
+        if self._thread_logger:
+            self._thread_logger.debug(f"計劃更新提示模板已生成: {len(plan_update_prompt)} 字符")
+        else:
+            logger.debug(f"計劃更新提示模板已生成: {len(plan_update_prompt)} 字符")
+
         # 這裡應該調用 LLM 重新制定計劃，現在簡化處理
         self.plan += f"\n更新的計劃（第 {self.replan_counter} 次修正）"
 
     async def _get_agent_instruction(
-        self, agent: BaseResearchAgent, task: str, round_num: int
+        self, agent: Union[BaseResearchAgent, BaseChatAgent], task: str, round_num: int
     ) -> str:
         """
         根據智能體角色和任務狀態生成具體的指令
@@ -570,8 +842,14 @@ class LedgerOrchestrator:
         Returns:
             str: 給智能體的具體指令
         """
-        role = agent.role
-        name = agent.name
+        if self._is_autogen_system:
+            # AutoGen 智能體
+            role = getattr(agent, "role", "unknown")
+            name = getattr(agent, "name", "Unknown")
+        else:
+            # 傳統智能體
+            role = agent.role
+            name = agent.name
 
         # 根據角色和輪數生成不同的指令
         if role == AgentRole.COORDINATOR:
@@ -608,11 +886,142 @@ class LedgerOrchestrator:
             # 預設指令
             return f"請處理任務：{task}"
 
+    async def execute_workflow(
+        self,
+        task: str,
+        initial_message: Optional[Union[str, TextMessage]] = None,
+        thread_id: Optional[str] = None,
+        cancellation_token: Optional[CancellationToken] = None,
+    ) -> WorkflowResult:
+        """
+        執行完整的工作流（AutoGen 模式）
+
+        Args:
+            task: 任務描述
+            initial_message: 初始用戶消息
+            thread_id: 線程 ID
+            cancellation_token: 取消令牌
+
+        Returns:
+            WorkflowResult: 執行結果
+        """
+        if not self._is_autogen_system:
+            raise ValueError("execute_workflow 僅支持 AutoGen 模式")
+
+        # 設置線程上下文
+        if thread_id:
+            self._setup_thread_context(thread_id)
+
+        # 初始化任務
+        self.task = task
+
+        if self._thread_logger:
+            self._thread_logger.info(f"開始執行工作流: {task}")
+        else:
+            logger.info(f"開始執行工作流: {task}")
+
+        try:
+            # 添加初始消息
+            if initial_message:
+                if isinstance(initial_message, TextMessage):
+                    self.conversation_history.append(initial_message)
+                else:
+                    task_message = TextMessage(content=initial_message, source="user")
+                    self.conversation_history.append(task_message)
+            else:
+                # 創建任務初始化消息
+                task_message = TextMessage(content=task, source="user")
+                self.conversation_history.append(task_message)
+
+            final_message = None
+
+            # 主執行循環
+            while self.round_count < self.max_rounds:
+                # 選擇下一個智能體
+                next_agent = await self.select_next_agent()
+
+                if next_agent is None:
+                    # 任務完成或達到限制
+                    break
+
+                # 準備智能體輸入消息
+                if self.ledger_history:
+                    latest_ledger = self.ledger_history[-1]
+                    agent_input = TextMessage(
+                        content=latest_ledger.instruction_or_question, source="Orchestrator"
+                    )
+                else:
+                    agent_input = TextMessage(content=task, source="user")
+
+                # 調用智能體
+                if self._thread_logger:
+                    self._thread_logger.info(f"調用智能體: {next_agent.name}")
+
+                try:
+                    agent_response = await next_agent.on_messages(
+                        [agent_input], cancellation_token=cancellation_token
+                    )
+
+                    # 記錄智能體回應
+                    self.conversation_history.append(agent_response)
+                    final_message = agent_response
+
+                    if self._thread_logger:
+                        self._thread_logger.info(
+                            f"智能體 {next_agent.name} 回應: {agent_response.content[:100]}..."
+                        )
+
+                except Exception as e:
+                    error_msg = f"智能體 {next_agent.name} 執行失敗: {e}"
+                    if self._thread_logger:
+                        self._thread_logger.error(error_msg)
+
+                    return WorkflowResult(
+                        success=False, error_message=error_msg, total_rounds=self.round_count
+                    )
+
+            # 構建結果
+            completed_steps = []
+            facts_learned = []
+
+            if self.ledger_history:
+                latest_ledger = self.ledger_history[-1]
+                completed_steps = latest_ledger.completed_steps
+                facts_learned = latest_ledger.facts_learned
+
+                success = latest_ledger.is_request_satisfied
+            else:
+                success = False
+
+            if self._thread_logger:
+                self._thread_logger.info(
+                    f"工作流執行完成，成功: {success}, 輪數: {self.round_count}"
+                )
+
+            return WorkflowResult(
+                success=success,
+                final_message=final_message,
+                total_rounds=self.round_count,
+                completed_steps=completed_steps,
+                facts_learned=facts_learned,
+            )
+
+        except Exception as e:
+            error_msg = f"工作流執行失敗: {e}"
+            if self._thread_logger:
+                self._thread_logger.error(error_msg)
+            else:
+                logger.error(error_msg)
+
+            return WorkflowResult(
+                success=False, error_message=error_msg, total_rounds=self.round_count
+            )
+
     def get_status(self) -> Dict[str, Any]:
         """取得當前狀態"""
         latest_ledger = self.ledger_history[-1] if self.ledger_history else None
 
-        return {
+        status = {
             "task": self.task,
             "round_count": self.round_count,
             "max_rounds": self.max_rounds,
@@ -629,4 +1038,78 @@ class LedgerOrchestrator:
             if latest_ledger
             else None,
             "conversation_length": len(self.conversation_history),
+            "is_autogen_system": self._is_autogen_system,
+            "thread_id": self._current_thread_id,
         }
+
+        # 添加 Command 系統信息
+        if HAS_COMMAND_SYSTEM and self.command_handler:
+            status["command_system"] = {
+                "enabled": True,
+                "current_command": self.current_command.to_dict() if self.current_command else None,
+                "is_complete": self.command_handler.is_workflow_complete(),
+                "next_target": self.command_handler.get_next_target(),
+                "command_count": len(self.command_handler.command_history),
+            }
+        else:
+            status["command_system"] = {"enabled": False}
+
+        return status
+
+    def process_agent_command(
+        self, agent_response: Union[Dict[str, Any], TextMessage]
+    ) -> Optional[AutoGenCommand]:
+        """
+        處理智能體回應並生成 Command（如果適用）
+
+        Args:
+            agent_response: 智能體的回應消息
+
+        Returns:
+            AutoGenCommand 對象或 None
+        """
+        if not HAS_COMMAND_SYSTEM:
+            return None
+
+        try:
+            # 提取流程控制信息
+            flow_info = self.extract_flow_control_info(agent_response)
+
+            if flow_info:
+                command = parse_flow_control_to_command(flow_info)
+                self.current_command = command
+
+                if self.command_handler:
+                    # 更新狀態
+                    updated_state = self.command_handler.process_command(command)
+
+                    if self._thread_logger:
+                        self._thread_logger.info(
+                            f"處理 Command: goto={command.goto}, 狀態更新: {list(updated_state.keys())}"
+                        )
+
+                return command
+
+        except Exception as e:
+            if self._thread_logger:
+                self._thread_logger.error(f"處理智能體 Command 失敗: {e}")
+
+        return None
+
+    def clear_history(self):
+        """清除歷史記錄"""
+        self.conversation_history.clear()
+        self.ledger_history.clear()
+        self.round_count = 0
+        self.stall_counter = 0
+        self.replan_counter = 0
+
+        # 清除 Command 歷史
+        if self.command_handler:
+            self.command_handler.clear_history()
+        self.current_command = None
+
+        if self._thread_logger:
+            self._thread_logger.info("工作流歷史已清除")
+        else:
+            logger.info("工作流歷史已清除")
