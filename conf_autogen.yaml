@@ -66,6 +66,57 @@ agents:
     llm_config_override:
       temperature: 0.0
 
+  # V3 版本智能體配置 (AutoGen SelectorGroupChat)
+  coordinator_v3:
+    name: "CoordinatorAgentV3"
+    role: "coordinator"
+    system_message: "你是協調者智能體，負責分析任務需求並協調整個研究工作流程。請以結構化的 JSON 格式回應，包含任務分析和工作流程策略。"
+    llm_config_override:
+      temperature: 0.3
+      max_tokens: 2000
+
+  planner_v3:
+    name: "PlannerAgentV3"
+    role: "planner"
+    system_message: "你是規劃者智能體，負責制定詳細的執行計劃。請將任務分解為具體步驟，並以 JSON 格式回應計劃內容。"
+    llm_config_override:
+      temperature: 0.4
+      max_tokens: 3000
+
+  researcher_v3:
+    name: "ResearcherAgentV3"
+    role: "researcher"
+    system_message: "你是研究者智能體，負責網路搜尋和資訊收集。使用可用工具進行研究，並以 JSON 格式回應研究結果。"
+    tools:
+      - "web_search"
+      - "crawl_website"
+      - "local_search"
+    llm_config_override:
+      temperature: 0.2
+      max_tokens: 4000
+
+  coder_v3:
+    name: "CoderAgentV3"
+    role: "coder"
+    system_message: "你是程式設計師智能體，負責程式碼分析和執行。使用 Python 執行環境進行數據處理和分析，並以 JSON 格式回應執行結果。"
+    tools:
+      - "python_repl"
+    code_execution_config:
+      work_dir: "temp_code_v3"
+      use_docker: false
+      timeout: 60
+    llm_config_override:
+      temperature: 0.1
+      max_tokens: 5000
+
+  reporter_v3:
+    name: "ReporterAgentV3"
+    role: "reporter"
+    system_message: "你是報告者智能體，負責整理所有研究和分析結果，生成詳細的最終報告。請以 JSON 格式回應，並在完成時明確標示 'WORKFLOW_COMPLETE'。"
+    llm_config_override:
+      temperature: 0.0
+      max_tokens: 6000
+
 # 工作流程配置
 workflows:
   research:
@@ -74,6 +125,25 @@ workflows:
     workflow_type: "sequential_with_feedback"
     human_feedback_steps: ["plan_review"]
     max_iterations: 3
+
+  # V3 版本工作流程 (AutoGen SelectorGroupChat)
+  research_v3:
+    enabled_agents:
+      [
+        "coordinator_v3",
+        "planner_v3",
+        "researcher_v3",
+        "coder_v3",
+        "reporter_v3",
+      ]
+    workflow_type: "selector_group_chat"
+    max_turns: 50
+    allow_repeated_speaker: true
+    termination_keywords: ["WORKFLOW_COMPLETE", "TERMINATE"]
+    selector_config:
+      use_custom_selector: true
+      fallback_to_model: true
+      max_selection_attempts: 3
 
   podcast:
     enabled_agents:

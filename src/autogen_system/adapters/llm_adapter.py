@@ -292,10 +292,17 @@ class LLMChatCompletionAdapter(ChatCompletionClient):
     @property
     def model_info(self) -> Dict[str, Any]:
         """返回模型信息"""
+        # AutoGen SelectorGroupChat 需要 family 字段
+        family = "gpt-4o-mini" if self.llm_type == "reasoning" else "gpt-4o"
+
         return {
             "model": self.llm_type,
+            "family": family,  # 必需的字段
             "type": "LLMChatCompletionAdapter",
             "capabilities": self.capabilities,
+            "vision": False,  # 額外的標準字段
+            "function_calling": True,
+            "json_mode": True,
         }
 
     async def create_stream(self, messages: Sequence[LLMMessage], **kwargs):
@@ -333,4 +340,18 @@ def create_chat_client_for_agent(agent_name: str) -> ChatCompletionClient:
         llm_type = AGENT_LLM_MAP.get(agent_name, "basic")
     else:
         llm_type = "basic"
+    return LLMChatCompletionAdapter(llm_type)
+
+
+def create_autogen_model_client(llm_type: str, config: Dict[str, Any]) -> ChatCompletionClient:
+    """
+    根據 LLM 類型和配置創建 AutoGen 模型客戶端
+
+    Args:
+        llm_type: LLM 類型 ("basic" 或 "reasoning")
+        config: 配置字典
+
+    Returns:
+        ChatCompletionClient 實例
+    """
     return LLMChatCompletionAdapter(llm_type)

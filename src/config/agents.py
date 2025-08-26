@@ -17,4 +17,10 @@ AGENT_LLM_MAP: dict[str, LLMType] = {
     "ppt_composer": "basic",  # 格式化任務用基礎模型
     "prose_writer": "basic",  # 文字創作用基礎模型
     "prompt_enhancer": "reasoning",  # 提示詞優化需要推理能力
+    # V3 版本智能體 (AutoGen SelectorGroupChat)
+    "CoordinatorAgentV3": "basic",  # 協調工作流程用基礎模型
+    "PlannerAgentV3": "basic",  # 制定計劃用基礎模型
+    "ResearcherAgentV3": "basic",  # 搜尋研究用基礎模型
+    "CoderAgentV3": "reasoning",  # 程式碼執行需要推理能力
+    "ReporterAgentV3": "reasoning",  # 報告生成需要推理能力
 }

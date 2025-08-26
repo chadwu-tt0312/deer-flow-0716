@@ -67,7 +67,7 @@ class ToolFactory:
         await self._create_code_execution_tools()
         await self._create_crawl_tools()
         await self._create_mcp_tools()
-        await self._create_retriever_tools()
+        # await self._create_retriever_tools()
 
         # 返回所有註冊的工具
         tools = {}
@@ -196,21 +196,21 @@ class ToolFactory:
         except Exception as e:
             logger.error(f"MCP 工具創建失敗: {e}")
 
-    async def _create_retriever_tools(self):
-        """創建檢索工具"""
-        try:
-            logger.info("創建檢索工具")
+    # async def _create_retriever_tools(self):
+    #     """創建檢索工具"""
+    #     try:
+    #         logger.info("創建檢索工具")
 
-            # 適配原有的檢索工具
-            retriever_tool = get_retriever_tool()
-            if retriever_tool:
-                global_tool_registry.register_langchain_tool(retriever_tool, category="analysis")
+    #         # 適配原有的檢索工具
+    #         retriever_tool = get_retriever_tool()
+    #         if retriever_tool:
+    #             global_tool_registry.register_langchain_tool(retriever_tool, category="analysis")
 
-            self.initialized_tools["retriever"] = True
-            logger.info("檢索工具創建成功")
+    #         self.initialized_tools["retriever"] = True
+    #         logger.info("檢索工具創建成功")
 
-        except Exception as e:
-            logger.error(f"檢索工具創建失敗: {e}")
+    #     except Exception as e:
+    #         logger.error(f"檢索工具創建失敗: {e}")
 
     def get_tools_for_agent(self, agent_type: str) -> List[Callable]:
         """

@@ -14,7 +14,8 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from langchain_core.tools import BaseTool as LangChainTool
-from autogen_agentchat.base import Tool as AutoGenTool
+# 注意：AutoGen 0.7.2 版本中已移除 Tool 類別
+# from autogen_agentchat.base import Tool as AutoGenTool
 
 from src.logging import get_logger
 
