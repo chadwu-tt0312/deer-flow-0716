@@ -26,47 +26,6 @@ autogen:
 
 # 智能體角色配置
 agents:
-  coordinator:
-    name: "CoordinatorAgent"
-    role: "coordinator"
-    system_message: "你是協調者，負責管理整個研究工作流程。"
-    llm_config_override:
-      temperature: 0.3
-
-  planner:
-    name: "PlannerAgent"
-    role: "planner"
-    system_message: "你是計劃者，負責分析需求並制定詳細的執行計劃。"
-    llm_config_override:
-      temperature: 0.5
-
-  researcher:
-    name: "ResearcherAgent"
-    role: "researcher"
-    system_message: "你是研究員，負責進行網路搜尋和資訊收集。"
-    tools:
-      - "web_search"
-      - "crawl_tool"
-      # - "local_search"
-
-  coder:
-    name: "CoderAgent"
-    role: "coder"
-    system_message: "你是程式設計師，負責程式碼分析和執行。"
-    tools:
-      - "python_repl"
-    code_execution_config:
-      work_dir: "temp_code"
-      use_docker: false
-
-  reporter:
-    name: "ReporterAgent"
-    role: "reporter"
-    system_message: "你是報告撰寫者，負責整理資訊並生成最終報告。"
-    llm_config_override:
-      temperature: 0.0
-
-  # V3 版本智能體配置 (AutoGen SelectorGroupChat)
   coordinator_v3:
     name: "CoordinatorAgentV3"
     role: "coordinator"
@@ -90,7 +49,7 @@ agents:
     tools:
       - "web_search"
       - "crawl_website"
-      - "local_search"
+      # - "local_search"
     llm_config_override:
       temperature: 0.2
       max_tokens: 4000
@@ -106,7 +65,7 @@ agents:
       use_docker: false
       timeout: 60
     llm_config_override:
-      temperature: 0.1
+      temperature: 0.0
       max_tokens: 5000
 
   reporter_v3:
@@ -229,20 +188,3 @@ LOGGING:
   format:
     main: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
     thread: "%(asctime)s - %(levelname)s - %(message)s"
-
-  # 特定功能日誌
-  conversation_log: true
-  agent_actions_log: true
-
-# 安全設定
-security:
-  enable_code_execution: true
-  sandbox_mode: true
-  allowed_file_extensions: [".py", ".txt", ".md", ".json", ".csv"]
-  max_file_size_mb: 10
-
-# 效能設定
-performance:
-  parallel_execution: false # 暫時關閉，等穩定後開啟
-  cache_responses: true
-  max_memory_mb: 1000

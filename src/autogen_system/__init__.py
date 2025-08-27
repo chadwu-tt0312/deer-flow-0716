@@ -2,35 +2,29 @@
 # SPDX-License-Identifier: MIT
 
 """
-AutoGen 系統模組
+AutoGen 系統模組 V3
 
 此模組包含基於 Microsoft AutoGen 框架的多智能體系統實現，
 用於替代原有的 LangGraph 架構。
 
 主要組件：
-- agents: 智能體實現
+- agents: V3 智能體實現
 - conversations: 對話流程管理
 - tools: 工具適配器和集成
 - config: 配置管理
-- controllers: 工作流控制器
+- adapters: 適配器層
 """
 
 __version__ = "0.1.0"
 __author__ = "DeerFlow Team"
 
 # 匯出主要類別
-from .controllers.workflow_controller import WorkflowController
-from .controllers.ledger_orchestrator import LedgerOrchestrator
-from .agents.base_agent import BaseResearchAgent, AgentFactory
-from .config.agent_config import AgentConfig, WorkflowConfig, AgentRole, WorkflowType
+from .agents.agents_v3 import BaseAgentV3, create_all_agents_v3
+from .config.agent_config import AgentConfig, AgentRole
 
 __all__ = [
-    "WorkflowController",
-    "LedgerOrchestrator",
-    "BaseResearchAgent",
-    "AgentFactory",
+    "BaseAgentV3",
+    "create_all_agents_v3",
     "AgentConfig",
-    "WorkflowConfig",
     "AgentRole",
-    "WorkflowType",
 ]

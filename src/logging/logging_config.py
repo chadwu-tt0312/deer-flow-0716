@@ -782,6 +782,10 @@ def disable_external_loggers():
         "mcp.client.sse",  # MCP SSE 客戶端日誌
         "mcp.client",  # MCP 客戶端日誌
         "mcp",  # 其他 MCP 相關日誌
+        "autogen_core",  # AutoGen 核心日誌
+        "autogen_core.events",  # AutoGen 事件日誌
+        "autogen",  # AutoGen 相關日誌
+        "autogen_agentchat",  # AutoGen AgentChat 日誌
     ]
 
     for logger_name in external_loggers:

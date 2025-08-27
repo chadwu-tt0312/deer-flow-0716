@@ -9,19 +9,15 @@
 
 import os
 import yaml
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 from pathlib import Path
 from dotenv import load_dotenv
 
 from .agent_config import (
     AgentConfig,
-    WorkflowConfig,
     LLMConfig,
-    CodeExecutionConfig,
-    GroupChatConfig,
     AgentRole,
-    WorkflowType,
-    DEFAULT_RESEARCH_WORKFLOW_CONFIG,
+    DEFAULT_AGENT_CONFIGS,
 )
 from src.logging import get_logger
 
@@ -59,7 +55,6 @@ class ConfigLoader:
         try:
             with open(config_path, "r", encoding="utf-8") as f:
                 config = yaml.safe_load(f)
-            # logger.info(f"成功載入配置檔案: {config_path}")
             return config or {}
         except Exception as e:
             logger.error(f"載入配置檔案失敗: {config_path}, 錯誤: {e}")
@@ -173,20 +168,6 @@ class ConfigLoader:
             # 使用預設配置
             llm_config = self.load_llm_config()
 
-        # 程式碼執行配置
-        code_execution_config = None
-        if "code_execution_config" in agent_dict:
-            code_config = agent_dict["code_execution_config"]
-            if isinstance(code_config, dict):
-                code_execution_config = CodeExecutionConfig(
-                    enabled=True,
-                    work_dir=code_config.get("work_dir", "temp_code"),
-                    use_docker=code_config.get("use_docker", False),
-                    timeout=code_config.get("timeout", 60),
-                    max_execution_time=code_config.get("max_execution_time", 300),
-                    allowed_modules=code_config.get("allowed_modules", []),
-                )
-
         return AgentConfig(
             name=agent_dict.get("name", agent_name),
             role=role,
@@ -195,67 +176,7 @@ class ConfigLoader:
             tools=agent_dict.get("tools", []),
             max_consecutive_auto_reply=agent_dict.get("max_consecutive_auto_reply", 10),
             human_input_mode=agent_dict.get("human_input_mode", "NEVER"),
-            code_execution_config=code_execution_config,
             description=agent_dict.get("description", ""),
-        )
-
-    def load_workflow_config(self, workflow_name: str = "research") -> WorkflowConfig:
-        """載入工作流配置"""
-        config = self.load_yaml_config()
-
-        # 如果沒有配置檔案，返回預設配置
-        if not config:
-            logger.info("使用預設研究工作流配置")
-            return DEFAULT_RESEARCH_WORKFLOW_CONFIG
-
-        workflows = config.get("workflows", {})
-        workflow_dict = workflows.get(workflow_name, {})
-
-        if not workflow_dict:
-            logger.warning(f"找不到工作流配置: {workflow_name}, 使用預設配置")
-            return DEFAULT_RESEARCH_WORKFLOW_CONFIG
-
-        # 載入智能體配置
-        agents_config = config.get("agents", {})
-        enabled_agents = workflow_dict.get("enabled_agents", [])
-
-        agents = []
-        for agent_name in enabled_agents:
-            if agent_name in agents_config:
-                agent_config = self.load_agent_config(agent_name, agents_config[agent_name])
-                agents.append(agent_config)
-            else:
-                logger.warning(f"找不到智能體配置: {agent_name}")
-
-        # 群組對話配置
-        group_chat_config = None
-        if "group_chat" in config.get("autogen", {}):
-            gc_config = config["autogen"]["group_chat"]
-            group_chat_config = GroupChatConfig(
-                agents=enabled_agents,
-                max_round=gc_config.get("max_round", 50),
-                admin_name=gc_config.get("admin_name", "Admin"),
-                speaker_selection_method=gc_config.get("speaker_selection_method", "auto"),
-                allow_repeat_speaker=gc_config.get("allow_repeat_speaker", True),
-                send_introductions=gc_config.get("send_introductions", False),
-                enable_clear_history=gc_config.get("enable_clear_history", False),
-            )
-
-        try:
-            workflow_type = WorkflowType(workflow_name)
-        except ValueError:
-            workflow_type = WorkflowType.RESEARCH
-
-        return WorkflowConfig(
-            name=workflow_name,
-            workflow_type=workflow_type,
-            agents=agents,
-            group_chat_config=group_chat_config,
-            conversation_pattern=workflow_dict.get("workflow_type", "sequential"),
-            max_iterations=workflow_dict.get("max_iterations", 3),
-            human_feedback_steps=workflow_dict.get("human_feedback_steps", []),
-            timeout=workflow_dict.get("timeout", 3600),
-            extra_config=workflow_dict.get("extra_config", {}),
         )
 
     def get_tool_config(self, tool_name: str) -> Dict[str, Any]:
@@ -264,86 +185,8 @@ class ConfigLoader:
         tools_config = config.get("tools", {})
         return tools_config.get(tool_name, {})
 
-    def load_tool_config(self, tool_name: str) -> Dict[str, Any]:
-        """載入工具配置（新增方法）"""
-        config = self.load_yaml_config()
-        tools_config = config.get("tools", {})
-        tool_config = tools_config.get(tool_name, {})
-
-        # 如果工具配置中有環境變數引用，進行替換
-        if tool_config and isinstance(tool_config, dict):
-            tool_config = self._resolve_environment_variables(tool_config)
-
-        return tool_config
-
-    def load_security_config(self) -> Dict[str, Any]:
-        """載入安全配置（新增方法）"""
-        config = self.load_yaml_config()
-        security_config = config.get("security", {})
-
-        # 如果安全配置中有環境變數引用，進行替換
-        if security_config and isinstance(security_config, dict):
-            security_config = self._resolve_environment_variables(security_config)
-
-        return security_config
-
-    def load_performance_config(self) -> Dict[str, Any]:
-        """載入效能配置（新增方法）"""
-        config = self.load_yaml_config()
-        performance_config = config.get("performance", {})
-
-        # 如果效能配置中有環境變數引用，進行替換
-        if performance_config and isinstance(performance_config, dict):
-            performance_config = self._resolve_environment_variables(performance_config)
-
-        return performance_config
-
-    def load_logging_config(self) -> Dict[str, Any]:
-        """載入記錄配置（新增方法）"""
-        config = self.load_yaml_config()
-        logging_config = config.get("LOGGING", {})
-
-        # 如果記錄配置中有環境變數引用，進行替換
-        if logging_config and isinstance(logging_config, dict):
-            logging_config = self._resolve_environment_variables(logging_config)
-
-        return logging_config
-
-    def _resolve_environment_variables(self, config_dict: Dict[str, Any]) -> Dict[str, Any]:
-        """解析配置中的環境變數引用"""
-        resolved_config = {}
-
-        for key, value in config_dict.items():
-            if isinstance(value, str) and value.startswith("$"):
-                # 環境變數引用，例如 $AZURE_OPENAI_ENDPOINT
-                env_var = value[1:]  # 移除 $ 符號
-                resolved_value = os.getenv(env_var)
-                if resolved_value is not None:
-                    resolved_config[key] = resolved_value
-                else:
-                    logger.warning(f"環境變數 {env_var} 未設定")
-                    resolved_config[key] = value  # 保留原始值
-            elif isinstance(value, dict):
-                # 遞歸處理嵌套字典
-                resolved_config[key] = self._resolve_environment_variables(value)
-            elif isinstance(value, list):
-                # 處理列表中的環境變數引用
-                resolved_list = []
-                for item in value:
-                    if isinstance(item, str) and item.startswith("$"):
-                        env_var = item[1:]
-                        resolved_item = os.getenv(env_var, item)
-                        resolved_list.append(resolved_item)
-                    else:
-                        resolved_list.append(item)
-                resolved_config[key] = resolved_list
-            else:
-                resolved_config[key] = value
-
-        return resolved_config
-
     def get_environment_info(self) -> Dict[str, Any]:
-        """獲取環境變數資訊（新增方法）"""
+        """獲取環境變數資訊"""
         # 檢查可用的 API 金鑰
         openai_api_key = os.getenv("OPENAI_API_KEY")
         basic_model_api_key = os.getenv("BASIC_MODEL__API_KEY")
@@ -381,24 +224,12 @@ class ConfigLoader:
         return env_info
 
     def validate_configuration(self) -> Dict[str, Any]:
-        """驗證配置完整性（新增方法）"""
+        """驗證配置完整性"""
         validation_result = {"valid": True, "errors": [], "warnings": [], "missing_env_vars": []}
 
         # 檢查必要的環境變數 - 至少需要一個可用的 API 金鑰
-        required_env_vars = []
-        optional_env_vars = [
-            "OPENAI_API_KEY",
-            "AZURE_OPENAI_ENDPOINT",
-            "AZURE_OPENAI_API_KEY",
-            "AZURE_OPENAI_DEPLOYMENT_NAME",
-            "BASIC_MODEL__API_KEY",
-            "TAVILY_API_KEY",
-        ]
-
-        # 檢查是否有可用的 API 金鑰
         has_openai_key = bool(os.getenv("OPENAI_API_KEY"))
         has_azure_key = bool(os.getenv("AZURE_OPENAI_API_KEY") or os.getenv("BASIC_MODEL__API_KEY"))
-        has_azure_endpoint = bool(os.getenv("AZURE_OPENAI_ENDPOINT"))
 
         if not has_openai_key and not has_azure_key:
             validation_result["valid"] = False
@@ -408,16 +239,6 @@ class ConfigLoader:
             validation_result["missing_env_vars"].extend(
                 ["OPENAI_API_KEY", "AZURE_OPENAI_API_KEY", "BASIC_MODEL__API_KEY"]
             )
-
-        # 如果使用 Azure OpenAI，檢查必要的配置
-        if has_azure_key and not has_azure_endpoint:
-            validation_result["warnings"].append(
-                "使用 Azure OpenAI 時建議設定 AZURE_OPENAI_ENDPOINT"
-            )
-
-        for var in optional_env_vars:
-            if not os.getenv(var):
-                validation_result["warnings"].append(f"缺少可選的環境變數: {var}")
 
         # 檢查配置檔案
         config = self.load_yaml_config()

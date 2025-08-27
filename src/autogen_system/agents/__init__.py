@@ -2,25 +2,28 @@
 # SPDX-License-Identifier: MIT
 
 """
-AutoGen 智能體模組
+AutoGen 智能體模組 V3
 
-包含所有智能體的實現，基於 Microsoft AutoGen 的 ConversableAgent。
+包含所有 V3 智能體的實現，基於 Microsoft AutoGen 的 AssistantAgent。
 每個智能體都有特定的角色和功能。
 """
 
-from .base_agent import BaseResearchAgent, AgentFactory
-from .coordinator_agent import CoordinatorAgent
-from .planner_agent import PlannerAgent
-from .researcher_agent import ResearcherAgent
-from .coder_agent import CoderAgent
-from .reporter_agent import ReporterAgent
+from .agents_v3 import (
+    BaseAgentV3,
+    CoordinatorAgentV3,
+    PlannerAgentV3,
+    ResearcherAgentV3,
+    CoderAgentV3,
+    ReporterAgentV3,
+    create_all_agents_v3,
+)
 
 __all__ = [
-    "BaseResearchAgent",
-    "AgentFactory",
-    "CoordinatorAgent",
-    "PlannerAgent",
-    "ResearcherAgent",
-    "CoderAgent",
-    "ReporterAgent",
+    "BaseAgentV3",
+    "CoordinatorAgentV3",
+    "PlannerAgentV3",
+    "ResearcherAgentV3",
+    "CoderAgentV3",
+    "ReporterAgentV3",
+    "create_all_agents_v3",
 ]

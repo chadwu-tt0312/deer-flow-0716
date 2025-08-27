@@ -4,8 +4,7 @@
 """
 工具整合模組
 
-為 AutoGen SelectorGroupChat 範例整合所有現有工具，
-包括 web_search, crawl_tool, python_repl, local_search 等。
+為 AutoGen V3 智能體系統整合核心工具。
 """
 
 import asyncio
@@ -17,9 +16,7 @@ from src.tools import (
     get_web_search_tool,
     python_repl_tool,
     crawl_tool,
-    get_retriever_tool,
 )
-from src.autogen_system.tools.tool_factory import global_tool_factory
 
 logger = get_logger(__name__)
 
@@ -81,12 +78,6 @@ class ToolsIntegrator:
             # 3. 網頁爬蟲工具
             await self._setup_crawl_tools()
 
-            # 4. 本地檢索工具
-            # await self._setup_retrieval_tools()
-
-            # 5. 使用工具工廠獲取額外工具
-            await self._setup_factory_tools()
-
             self.initialized = True
             logger.info(f"工具初始化完成，共 {len(self.tools_cache)} 個工具")
 
@@ -108,10 +99,10 @@ class ToolsIntegrator:
                 return str(result)
 
             self.tools_cache["web_search"] = web_search
-            logger.info("✅ 網路搜尋工具設置完成")
+            logger.info("✅ web_search 工具設置完成")
 
         except Exception as e:
-            logger.error(f"❌ 網路搜尋工具設置失敗: {e}")
+            logger.error(f"❌ web_search 工具設置失敗: {e}")
 
     async def _setup_code_tools(self):
         """設置程式碼執行工具"""
@@ -140,51 +131,10 @@ class ToolsIntegrator:
                 return str(result)
 
             self.tools_cache["crawl_website"] = crawl_website
-            logger.info("✅ 網頁爬蟲工具設置完成")
+            logger.info("✅ crawl_website 工具設置完成")
 
         except Exception as e:
-            logger.error(f"❌ 網頁爬蟲工具設置失敗: {e}")
-
-    # async def _setup_retrieval_tools(self):
-    #     """設置檢索工具"""
-    #     try:
-    #         # 本地檢索工具 - 需要提供資源列表，目前跳過
-    #         # TODO: 在有資源配置時啟用檢索工具
-    #         # retriever_tool = get_retriever_tool(resources=[])
-    #         retriever_tool = None
-    #         if retriever_tool:
-
-    #             @autogen_tool_wrapper
-    #             async def local_search(query: str) -> str:
-    #                 """本地搜尋工具 - 在本地知識庫中搜尋相關資訊"""
-    #                 result = retriever_tool.invoke({"query": query})
-    #                 return str(result)
-
-    #             self.tools_cache["local_search"] = local_search
-    #             logger.info("✅ 本地檢索工具設置完成")
-    #         else:
-    #             logger.warning("⚠️ 本地檢索工具無法獲取，跳過")
-
-    #     except Exception as e:
-    #         logger.error(f"❌ 本地檢索工具設置失敗: {e}")
-
-    async def _setup_factory_tools(self):
-        """使用工具工廠設置額外工具"""
-        try:
-            # 從工具工廠獲取工具
-            factory_tools = await global_tool_factory.create_all_tools()
-
-            for tool_name, tool_func in factory_tools.items():
-                # 避免重複添加
-                if tool_name not in self.tools_cache:
-                    # 包裝工具函數
-                    wrapped_tool = autogen_tool_wrapper(tool_func)
-                    self.tools_cache[f"factory_{tool_name}"] = wrapped_tool
-
-            logger.info(f"✅ 工具工廠工具設置完成，新增 {len(factory_tools)} 個工具")
-
-        except Exception as e:
-            logger.error(f"❌ 工具工廠工具設置失敗: {e}")
+            logger.error(f"❌ crawl_website 工具設置失敗: {e}")
 
     def get_tools_for_agent(self, agent_type: str) -> List[Callable]:
         """
@@ -203,52 +153,34 @@ class ToolsIntegrator:
         tools = []
 
         if agent_type == "coordinator":
-            # 協調者可能需要狀態查詢工具
-            tools.extend(
-                [
-                    tool
-                    for name, tool in self.tools_cache.items()
-                    if "status" in name or "factory_mcp" in name
-                ]
-            )
+            # 協調者不需要特殊工具
+            pass
 
         elif agent_type == "researcher":
             # 研究者需要搜尋和爬蟲工具
-            research_tools = [
-                self.tools_cache.get("web_search"),
-                self.tools_cache.get("crawl_website"),
-                self.tools_cache.get("local_search"),
-            ]
-            # 加入工廠搜尋工具
-            research_tools.extend(
+            tools.extend(
                 [
-                    tool
-                    for name, tool in self.tools_cache.items()
-                    if "search" in name or "crawl" in name
+                    self.tools_cache.get("web_search"),
+                    self.tools_cache.get("crawl_website"),
                 ]
             )
-            tools.extend([tool for tool in research_tools if tool is not None])
 
         elif agent_type == "coder":
             # 程式設計師需要程式碼執行工具
-            code_tools = [
-                self.tools_cache.get("python_repl"),
-            ]
-            # 加入工廠程式碼工具
-            code_tools.extend(
+            tools.extend(
                 [
-                    tool
-                    for name, tool in self.tools_cache.items()
-                    if "python" in name or "code" in name or "executor" in name
+                    self.tools_cache.get("python_repl"),
                 ]
             )
-            tools.extend([tool for tool in code_tools if tool is not None])
 
         elif agent_type == "all":
             # 獲取所有工具
             tools = list(self.tools_cache.values())
 
-        logger.info(f"為 {agent_type} 智能體準備了 {len(tools)} 個工具")
+        # 過濾掉 None 值
+        tools = [tool for tool in tools if tool is not None]
+
+        # 移除重複的日誌輸出，只在初始化時輸出一次
         return tools
 
     def get_available_tools(self) -> Dict[str, str]:

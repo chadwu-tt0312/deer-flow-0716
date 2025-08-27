@@ -4,12 +4,14 @@
 """
 配置管理模組
 
-管理 AutoGen 系統的配置，包括智能體配置、工作流配置等。
+管理 AutoGen 系統的配置，包括智能體配置等。
 """
 
-from .agent_config import AgentConfig, WorkflowConfig
+from .agent_config import AgentConfig, AgentRole, LLMConfig, DEFAULT_AGENT_CONFIGS
 
 __all__ = [
     "AgentConfig",
-    "WorkflowConfig",
+    "AgentRole",
+    "LLMConfig",
+    "DEFAULT_AGENT_CONFIGS",
 ]
