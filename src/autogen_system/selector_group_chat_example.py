@@ -46,6 +46,7 @@ from src.autogen_system.agents.message_framework import (
     parse_workflow_message,
 )
 from src.autogen_system.tools.tools_integration import initialize_all_tools
+from src.autogen_system.workflow import create_selector_function, AgentSelector
 
 # 初始化日誌
 init_logging()
@@ -96,12 +97,37 @@ class WorkflowState:
         return None
 
 
+# 創建全局選擇器實例
+_global_selector = None
+
+
+def get_selector_func(selector_type: str = "basic", **kwargs):
+    """
+    獲取選擇器函數
+
+    Args:
+        selector_type: 選擇器類型 ("basic" 或 "advanced")
+        **kwargs: 選擇器初始化參數
+
+    Returns:
+        callable: 選擇器函數
+    """
+    global _global_selector
+
+    if _global_selector is None:
+        _global_selector = create_selector_function(
+            selector_type=selector_type, enable_debug=True, **kwargs
+        )
+
+    return _global_selector
+
+
 def selector_func(messages: Sequence[BaseAgentEvent | BaseChatMessage]) -> str | None:
     """
-    智能體選擇函數
+    智能體選擇函數（重構版本）
 
-    基於 builder.py 中 continue_to_running_research_team() 的邏輯，
-    根據當前訊息歷史和工作流程狀態決定下一個應該發言的智能體。
+    使用新的 AgentSelector 類來決定下一個應該發言的智能體。
+    保持與原始函數相同的介面以確保向後兼容性。
 
     Args:
         messages: 對話歷史訊息
@@ -109,118 +135,10 @@ def selector_func(messages: Sequence[BaseAgentEvent | BaseChatMessage]) -> str |
     Returns:
         str | None: 下一個智能體的名稱，或 None 讓模型自動選擇
     """
-    if not messages:
-        return "CoordinatorAgentV3"
-
-    last_message = messages[-1]
-    last_speaker = last_message.source
-
-    logger.info(f"selector_func: 上一個發言者 = {last_speaker}")
-
     try:
-        # 解析最後一條訊息以獲取工作流程信息
-        workflow_msg = parse_workflow_message(last_message.content)
-        logger.info(f"workflow_msg: {workflow_msg}")
-
-        # 0. 使用者發言 -> 協調者, last_message.content 是 user 輸入的訊息 "請研究人工智慧在教育領域的最新應用"
-        if last_speaker == "user":
-            logger.info("0. Selector: 使用者發言，轉到協調者")
-            return "CoordinatorAgentV3"
-
-        # 1. 協調者 -> 規劃者（初始階段）, last_message.content 是 coordinator 的訊息 "任務分析/工作流程策略/資源需求/時間預估"
-        if last_speaker == "CoordinatorAgentV3":
-            logger.info("1. Selector: 協調者完成初始分析，轉到規劃者")
-            return "PlannerAgentV3"
-
-        # 2. 規劃者邏輯, last_message.content 是 planner 的訊息 "計劃內容/資源需求"
-        elif last_speaker == "PlannerAgentV3":
-            if workflow_msg and workflow_msg.message_type == "plan":
-                plan_data = workflow_msg.data
-
-                # 如果沒有計劃步驟，重新規劃
-                if not plan_data.get("steps"):
-                    logger.info("2. Selector: 計劃為空，保持在規劃者")
-                    return "PlannerAgentV3"
-
-                # 檢查是否所有步驟都已完成
-                completed_steps = plan_data.get("completed_steps", [])
-                total_steps = plan_data.get("steps", [])
-                logger.info(f"completed_steps: {completed_steps}")
-                logger.info(f"total_steps: {total_steps}")
-
-                if len(completed_steps) >= len(total_steps):
-                    logger.info("2. Selector: 所有步驟已完成，轉到報告者")
-                    return "ReporterAgentV3"
-
-                # 找到下一個未完成的步驟
-                for step in total_steps:
-                    step_id = step.get("id", step.get("step_type"))
-                    logger.info(f"step_id: {step_id}")
-                    if step_id not in completed_steps:
-                        step_type = step.get("step_type", "").lower()
-                        logger.info(f"step_type: {step_type}")
-
-                        if "research" in step_type or "search" in step_type:
-                            logger.info(f"2. Selector: 需要執行研究步驟 {step_id}，轉到研究者")
-                            return "ResearcherAgentV3"
-                        elif "code" in step_type or "processing" in step_type:
-                            logger.info(
-                                f"2. Selector: 需要執行程式碼步驟 {step_id}，轉到程式設計師"
-                            )
-                            return "CoderAgentV3"
-                        else:
-                            logger.info(f"2. Selector: 未知步驟類型 {step_type}，轉到研究者")
-                            return "ResearcherAgentV3"
-
-                # 如果沒有找到未完成步驟，轉到報告者
-                logger.info("2. Selector: 找不到未完成步驟，轉到報告者")
-                return "ReporterAgentV3"
-
-        # 3. 研究者完成 -> 檢查是否需要繼續
-        elif last_speaker == "ResearcherAgentV3":
-            if workflow_msg and workflow_msg.message_type == "research_result":
-                # 檢查是否還有研究步驟
-                if "more_research_needed" in last_message.content:
-                    logger.info("3. Selector: 需要更多研究，保持在研究者")
-                    return "ResearcherAgentV3"
-                else:
-                    logger.info("3. Selector: 研究完成，轉回規劃者檢查下一步")
-                    return "PlannerAgentV3"
-
-        # 4. 程式設計師完成 -> 檢查是否需要繼續
-        elif last_speaker == "CoderAgentV3":
-            if workflow_msg and workflow_msg.message_type == "code_execution":
-                # 檢查是否還有程式碼步驟
-                if "more_coding_needed" in last_message.content:
-                    logger.info("4. Selector: 需要更多程式碼工作，保持在程式設計師")
-                    return "CoderAgentV3"
-                else:
-                    logger.info("4. Selector: 程式碼執行完成，轉回規劃者檢查下一步")
-                    return "PlannerAgentV3"
-
-        # 5. 報告者完成 -> 結束工作流程, 檢查訊息內容是否包含終止標記
-        elif last_speaker == "ReporterAgentV3":
-            # 檢查是否包含終止標記
-            has_termination_marker = (
-                "WORKFLOW_COMPLETE" in last_message.content or "TERMINATE" in last_message.content
-            )
-
-            if has_termination_marker:
-                logger.info("5. Selector: 報告者真正完成工作流程，包含終止標記，準備結束")
-                logger.info(
-                    f"   終止標記: {'WORKFLOW_COMPLETE' if 'WORKFLOW_COMPLETE' in last_message.content else 'TERMINATE'}"
-                )
-                return None  # 讓 AutoGen 處理結束邏輯
-            else:
-                logger.info("5. Selector: 報告者發言，但未包含終止標記，繼續執行")
-                logger.info("   提示：報告者需要在報告結尾包含 'WORKFLOW_COMPLETE' 或 'TERMINATE'")
-                # 如果報告者沒有明確表示完成，讓模型自動選擇下一個
-                return None
-
-        # 6. 默認邏輯：如果無法判斷，讓模型自動選擇
-        logger.info("6. Selector: 使用默認邏輯，讓模型自動選擇")
-        return None
-
+        # 獲取選擇器函數
+        selector = get_selector_func()
+        return selector(messages)
     except Exception as e:
         logger.error(f"Selector 函數執行錯誤: {e}")
         return None
@@ -295,6 +213,9 @@ async def run_workflow_example(task: str, config_path: str = "conf_autogen.yaml"
         # 獲取模型客戶端（使用協調者的模型）
         model_client = agents["coordinator"]._model_client
 
+        # 獲取選擇器函數（可以選擇 "basic" 或 "advanced"）
+        selector_function = get_selector_func(selector_type="basic", max_turns=50)
+
         # 創建 SelectorGroupChat
         # 注意：參數名稱可能因版本而異，嘗試不同的參數名稱
         try:
@@ -302,7 +223,7 @@ async def run_workflow_example(task: str, config_path: str = "conf_autogen.yaml"
                 participants=agent_list,  # 嘗試 participants 參數
                 model_client=model_client,
                 termination_condition=termination,
-                selector_func=selector_func,
+                selector_func=selector_function,
                 max_turns=50,
             )
         except TypeError:
@@ -312,14 +233,14 @@ async def run_workflow_example(task: str, config_path: str = "conf_autogen.yaml"
                     agent_list,  # 嘗試位置參數
                     model_client=model_client,
                     termination_condition=termination,
-                    selector_func=selector_func,
+                    selector_func=selector_function,
                     max_turns=50,
                 )
             except TypeError:
                 # 最後嘗試最簡化的初始化
                 team = SelectorGroupChat(
                     participants=agent_list,
-                    selector_func=selector_func,
+                    selector_func=selector_function,
                 )
 
         logger.info("✅ SelectorGroupChat 創建成功")
