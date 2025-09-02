@@ -11,14 +11,25 @@ import asyncio
 from typing import Dict, List, Callable, Any, Optional
 from functools import wraps
 
-from src.logging import get_logger
+from src.deerflow_logging import get_thread_logger
+
+
+def _get_logger():
+    """獲取當前 thread 的 logger"""
+    try:
+        return get_thread_logger()
+    except RuntimeError:
+        # 如果沒有設定 thread context，使用簡單的 logger
+        from src.deerflow_logging import get_simple_logger
+
+        return get_simple_logger(__name__)
+
+
 from src.tools import (
     get_web_search_tool,
     python_repl_tool,
     crawl_tool,
 )
-
-logger = get_logger(__name__)
 
 
 def autogen_tool_wrapper(func: Callable) -> Callable:
@@ -47,7 +58,7 @@ def autogen_tool_wrapper(func: Callable) -> Callable:
 
         except Exception as e:
             error_msg = f"工具執行錯誤: {str(e)}"
-            logger.error(error_msg)
+            _get_logger().error(error_msg)
             return error_msg
 
     return async_wrapper
@@ -59,14 +70,14 @@ class ToolsIntegrator:
     def __init__(self):
         self.tools_cache: Dict[str, Callable] = {}
         self.initialized = False
-        logger.info("工具整合器初始化")
+        _get_logger().info("工具整合器初始化")
 
     async def initialize_tools(self) -> Dict[str, Callable]:
         """初始化所有工具"""
         if self.initialized:
             return self.tools_cache
 
-        logger.info("開始初始化工具...")
+        _get_logger().info("開始初始化工具...")
 
         try:
             # 1. 網路搜尋工具
@@ -79,10 +90,10 @@ class ToolsIntegrator:
             await self._setup_crawl_tools()
 
             self.initialized = True
-            logger.info(f"工具初始化完成，共 {len(self.tools_cache)} 個工具")
+            _get_logger().info(f"工具初始化完成，共 {len(self.tools_cache)} 個工具")
 
         except Exception as e:
-            logger.error(f"工具初始化失敗: {e}")
+            _get_logger().error(f"工具初始化失敗: {e}")
 
         return self.tools_cache
 
@@ -99,10 +110,10 @@ class ToolsIntegrator:
                 return str(result)
 
             self.tools_cache["web_search"] = web_search
-            logger.info("✅ web_search 工具設置完成")
+            _get_logger().info("✅ web_search 工具設置完成")
 
         except Exception as e:
-            logger.error(f"❌ web_search 工具設置失敗: {e}")
+            _get_logger().error(f"❌ web_search 工具設置失敗: {e}")
 
     async def _setup_code_tools(self):
         """設置程式碼執行工具"""
@@ -115,10 +126,10 @@ class ToolsIntegrator:
                 return str(result)
 
             self.tools_cache["python_repl"] = python_repl
-            logger.info("✅ Python REPL 工具設置完成")
+            _get_logger().info("✅ Python REPL 工具設置完成")
 
         except Exception as e:
-            logger.error(f"❌ Python REPL 工具設置失敗: {e}")
+            _get_logger().error(f"❌ Python REPL 工具設置失敗: {e}")
 
     async def _setup_crawl_tools(self):
         """設置爬蟲工具"""
@@ -131,10 +142,10 @@ class ToolsIntegrator:
                 return str(result)
 
             self.tools_cache["crawl_website"] = crawl_website
-            logger.info("✅ crawl_website 工具設置完成")
+            _get_logger().info("✅ crawl_website 工具設置完成")
 
         except Exception as e:
-            logger.error(f"❌ crawl_website 工具設置失敗: {e}")
+            _get_logger().error(f"❌ crawl_website 工具設置失敗: {e}")
 
     def get_tools_for_agent(self, agent_type: str) -> List[Callable]:
         """
@@ -147,7 +158,7 @@ class ToolsIntegrator:
             List[Callable]: 適用的工具列表
         """
         if not self.initialized:
-            logger.warning("工具尚未初始化，返回空列表")
+            _get_logger().warning("工具尚未初始化，返回空列表")
             return []
 
         tools = []
@@ -232,28 +243,28 @@ def get_available_tools_info() -> Dict[str, str]:
 
 async def test_tools_integration():
     """測試工具整合"""
-    logger.info("🧪 開始測試工具整合...")
+    _get_logger().info("🧪 開始測試工具整合...")
 
     # 初始化工具
     tools = await initialize_all_tools()
 
     # 顯示工具資訊
-    logger.info(f"📊 可用工具總數: {len(tools)}")
+    _get_logger().info(f"📊 可用工具總數: {len(tools)}")
 
     for agent_type in ["coordinator", "researcher", "coder"]:
         agent_tools = get_tools_for_agent_type(agent_type)
-        logger.info(f"🤖 {agent_type} 智能體工具數: {len(agent_tools)}")
+        _get_logger().info(f"🤖 {agent_type} 智能體工具數: {len(agent_tools)}")
 
     # 簡單功能測試
     try:
         if "web_search" in tools:
-            logger.info("🔍 測試網路搜尋工具...")
+            _get_logger().info("🔍 測試網路搜尋工具...")
             result = await tools["web_search"]("測試搜尋")
-            logger.info(f"✅ 搜尋測試完成: {len(str(result))} 字符")
+            _get_logger().info(f"✅ 搜尋測試完成: {len(str(result))} 字符")
     except Exception as e:
-        logger.error(f"❌ 搜尋測試失敗: {e}")
+        _get_logger().error(f"❌ 搜尋測試失敗: {e}")
 
-    logger.info("🎉 工具整合測試完成")
+    _get_logger().info("🎉 工具整合測試完成")
 
 
 if __name__ == "__main__":

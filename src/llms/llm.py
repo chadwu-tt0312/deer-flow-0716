@@ -40,7 +40,7 @@ async def _user_agent_hook_async(request):
 def _http_logging_hook_sync(request):
     """Synchronous hook to log HTTP requests."""
     from src.utils.http_logger import http_logger
-    from src.logging.context import get_thread_context
+    from src.deerflow_logging import get_thread_context
 
     thread_id = get_thread_context()
     request_id = http_logger.log_request(
@@ -58,7 +58,7 @@ def _http_logging_hook_sync(request):
 async def _http_logging_hook_async(request):
     """Asynchronous hook to log HTTP requests."""
     from src.utils.http_logger import http_logger
-    from src.logging.context import get_thread_context
+    from src.deerflow_logging import get_thread_context
 
     thread_id = get_thread_context()
     request_id = http_logger.log_request(
@@ -76,7 +76,7 @@ async def _http_logging_hook_async(request):
 def _http_response_hook_sync(response):
     """Synchronous hook to log HTTP responses."""
     from src.utils.http_logger import http_logger
-    from src.logging.context import get_thread_context
+    from src.deerflow_logging import get_thread_context
 
     thread_id = get_thread_context()
     request_id = response.request.extensions.get("request_id", "")
@@ -102,7 +102,7 @@ def _http_response_hook_sync(response):
 async def _http_response_hook_async(response):
     """Asynchronous hook to log HTTP responses."""
     from src.utils.http_logger import http_logger
-    from src.logging.context import get_thread_context
+    from src.deerflow_logging import get_thread_context
 
     thread_id = get_thread_context()
     request_id = response.request.extensions.get("request_id", "")

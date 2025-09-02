@@ -13,16 +13,15 @@ autogen:
 
   # 智能體基本設定
   agent_defaults:
-    max_consecutive_auto_reply: 10
     human_input_mode: "NEVER"
     code_execution_config: false
     
   # 群組對話設定
   group_chat:
-    max_round: 50
     admin_name: "Admin"
     speaker_selection_method: "auto"
     allow_repeat_speaker: true
+    # max_round 已移除，使用 .env 中的 AGENT_RECURSION_LIMIT 設定 (=30)
 
 # 智能體角色配置
 agents:
@@ -86,7 +85,7 @@ workflows:
 tools:
   web_search:
     provider: "tavily"  # tavily, brave_search, duckduckgo
-    max_results: 5
+    # max_results 已移除，使用 param 中的 "Max search results" 設定
     
   code_execution:
     timeout: 60

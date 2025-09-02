@@ -6,7 +6,7 @@ import requests
 from typing import Dict, Any, Optional, Union
 from .network_config import network_config
 from .http_logger import http_logger
-from ..logging.context import get_thread_context
+from src.deerflow_logging import get_thread_context
 
 
 class HttpClient:

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 from autogen_agentchat.messages import BaseAgentEvent, BaseChatMessage
 
-from src.logging import get_logger
+from src.deerflow_logging import get_simple_logger
 from ..agents.message_framework import (
     parse_workflow_message,
     MessageType,
@@ -22,7 +22,7 @@ from ..agents.message_framework import (
     extract_workflow_info,
 )
 
-logger = get_logger(__name__)
+logger = get_simple_logger(__name__)
 
 
 class AgentName(str, Enum):
@@ -33,7 +33,10 @@ class AgentName(str, Enum):
     RESEARCHER = "ResearcherAgentV3"
     CODER = "CoderAgentV3"
     REPORTER = "ReporterAgentV3"
+
     USER = "user"
+    BACKGROUND_INVESTIGATOR = "BackgroundInvestigatorAgentV3"
+    HUMAN_FEEDBACKER = "HumanFeedbackerAgentV3"
 
 
 class WorkflowPhase(str, Enum):
@@ -207,6 +210,8 @@ class AgentSelector:
             return WorkflowPhase.INITIALIZATION
         elif last_speaker == AgentName.COORDINATOR:
             return WorkflowPhase.COORDINATION
+        elif last_speaker == AgentName.BACKGROUND_INVESTIGATOR:
+            return WorkflowPhase.BACKGROUND_INVESTIGATION
         elif last_speaker == AgentName.PLANNER:
             return WorkflowPhase.PLANNING
         elif last_speaker in [AgentName.RESEARCHER, AgentName.CODER]:
@@ -249,7 +254,7 @@ class AgentSelector:
         # 根據 mermaid 流程圖：協調者 -> 檢查是否啟用背景調查
         if context.enable_background_investigation:
             logger.info("2. Selector: 協調者完成分析，啟用背景調查，轉到背景調查者")
-            return "BackgroundInvestigator"  # 這裡需要對應實際的背景調查 agent 名稱
+            return AgentName.BACKGROUND_INVESTIGATOR
         else:
             logger.info("2. Selector: 協調者完成分析，跳過背景調查，直接轉到規劃者")
             return AgentName.PLANNER
@@ -261,7 +266,7 @@ class AgentSelector:
         return AgentName.PLANNER
 
     def _handle_planning_phase(self, context: SelectionContext) -> Optional[str]:
-        """處理規劃階段（根據 mermaid 流程圖）"""
+        """處理規劃階段"""
 
         # 首先檢查計劃迭代次數是否已達上限
         if context.current_plan_iterations >= context.max_plan_iterations:
@@ -280,6 +285,9 @@ class AgentSelector:
             return None
 
         plan_data = context.parsed_message.data
+        logger.info(f"3. Selector: parsed_message.data = {plan_data}")
+        logger.info(f"3. Selector: parsed_message 類型 = {type(context.parsed_message)}")
+        logger.info(f"3. Selector: parsed_message 內容 = {context.parsed_message}")
 
         # 檢查計劃是否為空
         if not plan_data.get("steps"):
@@ -298,8 +306,32 @@ class AgentSelector:
             return AgentName.REPORTER
 
         # 檢查是否所有步驟都已完成
-        completed_steps = set(plan_data.get("completed_steps", []))
         total_steps = plan_data.get("steps", [])
+
+        # 優先使用 completed_steps 列表（測試案例格式）
+        completed_steps_from_list = plan_data.get("completed_steps", [])
+
+        # 如果 completed_steps 列表不為空，使用它
+        if completed_steps_from_list:
+            completed_steps = set(completed_steps_from_list)
+            logger.info(f"3. Selector: 使用 completed_steps 列表: {completed_steps_from_list}")
+        else:
+            # 否則從步驟狀態中提取已完成的步驟（實際 PlanMessage 格式）
+            completed_steps_list = []
+            for step in total_steps:
+                step_id = step.get("id", step.get("step_type", ""))
+                step_status = step.get("status")
+                if (
+                    step_status
+                    and hasattr(step_status, "value")
+                    and step_status.value == "completed"
+                ):
+                    completed_steps_list.append(step_id)
+            completed_steps = set(completed_steps_list)
+            logger.info(f"3. Selector: 從步驟狀態提取已完成步驟: {completed_steps_list}")
+
+        logger.info(f"3. Selector: 總步驟: {[s.get('id', 'unknown') for s in total_steps]}")
+        logger.info(f"3. Selector: 已完成步驟集合: {completed_steps}")
 
         if len(completed_steps) >= len(total_steps):
             # 所有步驟完成，增加迭代次數並重新規劃
@@ -319,8 +351,10 @@ class AgentSelector:
         # 如果自動接受計劃，直接進入執行階段
         if context.auto_accepted_plan:
             logger.info("3. Selector: 自動接受計劃，尋找下一個執行步驟")
+            logger.info(f"3. Selector: 總步驟數: {len(total_steps)}, 已完成步驟: {completed_steps}")
             next_step = self._find_next_step(total_steps, completed_steps)
             if next_step:
+                logger.info(f"3. Selector: 找到下一個步驟: {next_step.get('id', 'unknown')}")
                 return self._select_agent_for_step(next_step)
             else:
                 logger.info("3. Selector: 找不到未完成步驟，轉到報告者")
@@ -357,7 +391,7 @@ class AgentSelector:
             return None
 
     def _handle_execution_phase(self, context: SelectionContext) -> str:
-        """處理執行階段（根據 mermaid 流程圖）"""
+        """處理執行階段"""
         if context.last_speaker == AgentName.RESEARCHER:
             if "more_research_needed" in context.last_message_content:
                 logger.info("4. Selector: 需要更多研究，保持在研究者")
@@ -409,10 +443,16 @@ class AgentSelector:
         self, steps: List[Dict[str, Any]], completed_steps: set
     ) -> Optional[Dict[str, Any]]:
         """找到下一個未完成的步驟"""
+        logger.info(f"_find_next_step: 檢查 {len(steps)} 個步驟，已完成: {completed_steps}")
         for step in steps:
             step_id = step.get("id", step.get("step_type", ""))
+            logger.info(
+                f"_find_next_step: 檢查步驟 {step_id}，是否已完成: {step_id in completed_steps}"
+            )
             if step_id not in completed_steps:
+                logger.info(f"_find_next_step: 找到未完成步驟: {step_id}")
                 return step
+        logger.info("_find_next_step: 所有步驟都已完成")
         return None
 
     def _select_agent_for_step(self, step: Dict[str, Any]) -> str:

@@ -19,9 +19,18 @@ from .agent_config import (
     AgentRole,
     DEFAULT_AGENT_CONFIGS,
 )
-from src.logging import get_logger
+from src.deerflow_logging import get_thread_logger
 
-logger = get_logger(__name__)
+
+def _get_logger():
+    """獲取當前 thread 的 logger"""
+    try:
+        return get_thread_logger()
+    except RuntimeError:
+        # 如果沒有設定 thread context，使用簡單的 logger
+        from src.deerflow_logging import get_simple_logger
+
+        return get_simple_logger(__name__)
 
 
 class ConfigLoader:
@@ -40,16 +49,16 @@ class ConfigLoader:
         env_file = self.config_dir / ".env"
         if env_file.exists():
             load_dotenv(env_file)
-            logger.info(f"已載入環境變數檔案: {env_file}")
+            _get_logger().info(f"已載入環境變數檔案: {env_file}")
         else:
-            logger.info("未找到 .env 檔案，使用系統環境變數")
+            _get_logger().info("未找到 .env 檔案，使用系統環境變數")
 
     def load_yaml_config(self, config_file: str = "conf_autogen.yaml") -> Dict[str, Any]:
         """載入 YAML 配置檔案"""
         config_path = self.config_dir / config_file
 
         if not config_path.exists():
-            logger.warning(f"配置檔案不存在: {config_path}")
+            _get_logger().warning(f"配置檔案不存在: {config_path}")
             return {}
 
         try:
@@ -57,7 +66,7 @@ class ConfigLoader:
                 config = yaml.safe_load(f)
             return config or {}
         except Exception as e:
-            logger.error(f"載入配置檔案失敗: {config_path}, 錯誤: {e}")
+            _get_logger().error(f"載入配置檔案失敗: {config_path}, 錯誤: {e}")
             return {}
 
     def load_llm_config(

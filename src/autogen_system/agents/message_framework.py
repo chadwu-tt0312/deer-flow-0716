@@ -14,9 +14,9 @@ from dataclasses import dataclass, asdict
 from datetime import datetime
 from enum import Enum
 
-from src.logging import get_logger
+from src.deerflow_logging import get_simple_logger
 
-logger = get_logger(__name__)
+logger = get_simple_logger(__name__)
 
 
 class MessageType(str, Enum):
@@ -119,6 +119,7 @@ class PlanMessage(ResearchWorkflowMessage):
         steps: List[WorkflowStep],
         original_task: str,
         analysis: str = "",
+        completed_steps: List[str] = None,
         **kwargs,
     ):
         data = {
@@ -126,7 +127,7 @@ class PlanMessage(ResearchWorkflowMessage):
             "original_task": original_task,
             "analysis": analysis,
             "total_steps": len(steps),
-            "completed_steps": [],
+            "completed_steps": completed_steps or [],
         }
         super().__init__(
             message_type=MessageType.PLAN,
@@ -334,6 +335,7 @@ def parse_workflow_message(content: str) -> Optional[ResearchWorkflowMessage]:
                     steps=steps,
                     original_task=message_data["data"]["original_task"],
                     analysis=message_data["data"].get("analysis", ""),
+                    completed_steps=message_data["data"].get("completed_steps", []),
                     metadata=message_data.get("metadata", {}),
                 )
 

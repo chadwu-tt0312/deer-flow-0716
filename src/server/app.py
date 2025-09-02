@@ -40,7 +40,12 @@ from src.server.rag_request import (
     RAGResourcesResponse,
 )
 from src.tools import VolcengineTTS
-from src.logging import get_logger, set_thread_context, clear_thread_context, setup_thread_logging
+from src.deerflow_logging import (
+    get_simple_logger as get_logger,
+    set_thread_context,
+    clear_thread_context,
+    init_thread_logging as setup_thread_logging,
+)
 
 logger = get_logger(__name__)
 

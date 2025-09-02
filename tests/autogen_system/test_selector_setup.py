@@ -13,7 +13,7 @@ import os
 from pathlib import Path
 
 # 確保專案根目錄在路徑中
-project_root = Path(__file__).parent
+project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 
@@ -23,7 +23,7 @@ def test_imports():
 
     try:
         # 測試基礎導入
-        from src.logging import init_logging, get_logger
+        from src.deerflow_logging import get_simple_logger as get_logger
 
         print("✅ 基礎日誌模組導入成功")
 
@@ -42,7 +42,7 @@ def test_imports():
         print("✅ AutoGen 模組導入成功")
 
         # 測試範例模組導入
-        from src.autogen_system.controllers.message_framework import MessageType
+        from src.autogen_system.agents.message_framework import MessageType
 
         print("✅ 訊息框架導入成功")
 
@@ -243,7 +243,7 @@ async def main():
     if passed == total:
         print("🎉 所有測試通過！可以執行 SelectorGroupChat 範例。")
         print("\n執行指令:")
-        print("python run_selector_example.py")
+        print("python -m src.autogen_system.examples.basic.selector_group_chat_example")
     else:
         print("⚠️ 部分測試失敗，請檢查上述問題後重試。")
 

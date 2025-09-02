@@ -20,7 +20,10 @@ from src.autogen_system.workflow import (
     AgentName,
     WorkflowPhase,
 )
-from src.logging import init_logging, get_logger
+from src.deerflow_logging import (
+    init_simple_logging as init_logging,
+    get_simple_logger as get_logger,
+)
 
 # 初始化日誌
 init_logging()
@@ -67,13 +70,13 @@ def test_mermaid_flow_scenario():
     logger.info("\n--- 場景 3: 協調者完成 ---")
     messages.append(MockMessage("CoordinatorAgentV3", "任務分析完成，確定研究主題"))
     result = selector.select_next_agent(messages)
-    expected = "BackgroundInvestigator"  # 根據流程圖
+    expected = "BackgroundInvestigatorAgentV3"  # 根據流程圖
     assert result == expected, f"期望 {expected}，實際 {result}"
     logger.info(f"✅ 協調者正確選擇: {result}")
 
     # 場景 4: 背景調查 -> 規劃者
     logger.info("\n--- 場景 4: 背景調查完成 ---")
-    messages.append(MockMessage("BackgroundInvestigator", "背景調查完成，收集到相關資料"))
+    messages.append(MockMessage("BackgroundInvestigatorAgentV3", "背景調查完成，收集到相關資料"))
     result = selector.select_next_agent(messages)
     assert result == AgentName.PLANNER, f"期望 {AgentName.PLANNER}，實際 {result}"
     logger.info(f"✅ 背景調查正確選擇: {result}")

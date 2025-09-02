@@ -16,7 +16,7 @@ from typing import Sequence, Dict, Any, Optional
 from pathlib import Path
 
 # 添加專案根目錄到路徑
-project_root = Path(__file__).parent.parent.parent
+project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
 # AutoGen 核心導入
@@ -26,7 +26,11 @@ from autogen_agentchat.messages import BaseAgentEvent, BaseChatMessage, TextMess
 from autogen_agentchat.ui import Console
 
 # 專案內部導入
-from src.logging import init_logging, get_logger
+from src.deerflow_logging import (
+    init_thread_logging,
+    get_thread_logger,
+    set_thread_context,
+)
 from src.config import load_yaml_config
 
 # 導入重新組織後的模組
@@ -36,6 +40,8 @@ from src.autogen_system.agents.agents_v3 import (
     ResearcherAgentV3,
     CoderAgentV3,
     ReporterAgentV3,
+    BackgroundInvestigatorAgentV3,
+    HumanFeedbackerAgentV3,
 )
 from src.autogen_system.agents.message_framework import (
     ResearchWorkflowMessage,
@@ -48,9 +54,31 @@ from src.autogen_system.agents.message_framework import (
 from src.autogen_system.tools.tools_integration import initialize_all_tools
 from src.autogen_system.workflow import create_selector_function, AgentSelector
 
-# 初始化日誌
-init_logging()
-logger = get_logger(__name__)
+# 初始化 thread-safe 日誌
+init_thread_logging()
+# 設定 thread context（這裡使用固定的 thread_id，實際使用時會從請求中獲取）
+thread_id = "selector_group_chat_example"
+set_thread_context(thread_id)
+logger = get_thread_logger()  # 使用當前 thread context
+
+# 設定 AutoGen 和其他第三方庫的日誌級別和處理器
+import logging
+
+autogen_logger = logging.getLogger("autogen_agentchat")
+autogen_core_logger = logging.getLogger("autogen_core")
+
+# 將 AutoGen 的日誌也重定向到我們的檔案
+from src.deerflow_logging.thread_logger import _manager
+
+thread_logger_instance = _manager.get_logger(thread_id)
+for handler in thread_logger_instance.handlers:
+    if hasattr(handler, "baseFilename"):  # 檔案處理器
+        autogen_logger.addHandler(handler)
+        autogen_core_logger.addHandler(handler)
+        break
+
+autogen_logger.setLevel(logging.INFO)
+autogen_core_logger.setLevel(logging.INFO)
 
 
 class WorkflowState:
@@ -166,6 +194,8 @@ async def create_agents(config: Dict[str, Any]) -> Dict[str, Any]:
     researcher = await ResearcherAgentV3.create(config)
     coder = await CoderAgentV3.create(config)
     reporter = await ReporterAgentV3.create(config)
+    background_investigator = await BackgroundInvestigatorAgentV3.create(config)
+    human_feedbacker = await HumanFeedbackerAgentV3.create(config)
 
     agents = {
         "coordinator": coordinator,
@@ -173,6 +203,8 @@ async def create_agents(config: Dict[str, Any]) -> Dict[str, Any]:
         "researcher": researcher,
         "coder": coder,
         "reporter": reporter,
+        "background_investigator": background_investigator,
+        "human_feedbacker": human_feedbacker,
     }
 
     logger.info(f"智能體創建完成，共 {len(agents)} 個")
@@ -205,6 +237,8 @@ async def run_workflow_example(task: str, config_path: str = "conf_autogen.yaml"
             agents["researcher"].get_agent(),
             agents["coder"].get_agent(),
             agents["reporter"].get_agent(),
+            agents["background_investigator"].get_agent(),
+            agents["human_feedbacker"].get_agent(),
         ]
 
         # 創建終止條件

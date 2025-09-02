@@ -8,21 +8,21 @@
 autogen:
   # 預設 LLM 配置
   default_llm_config:
+    temperature: 0.0
     max_tokens: 100000
     timeout: 30
 
   # 智能體基本設定
   agent_defaults:
-    max_consecutive_auto_reply: 10
     human_input_mode: "NEVER"
     code_execution_config: false
 
   # 群組對話設定
   group_chat:
-    max_round: 50
     admin_name: "Admin"
-    speaker_selection_method: "auto"
-    allow_repeat_speaker: true
+    # speaker_selection_method: "auto"
+    # allow_repeat_speaker: true
+    # max_round 已移除，使用 .env 中的 AGENT_RECURSION_LIMIT 設定 (=30)
 
 # 智能體角色配置
 agents:
@@ -32,7 +32,6 @@ agents:
     system_message: "你是協調者智能體，負責分析任務需求並協調整個研究工作流程。請以結構化的 JSON 格式回應，包含任務分析和工作流程策略。"
     llm_config_override:
       temperature: 0.3
-      max_tokens: 2000
 
   planner_v3:
     name: "PlannerAgentV3"
@@ -40,7 +39,6 @@ agents:
     system_message: "你是規劃者智能體，負責制定詳細的執行計劃。請將任務分解為具體步驟，並以 JSON 格式回應計劃內容。"
     llm_config_override:
       temperature: 0.4
-      max_tokens: 3000
 
   researcher_v3:
     name: "ResearcherAgentV3"
@@ -52,7 +50,6 @@ agents:
       # - "local_search"
     llm_config_override:
       temperature: 0.2
-      max_tokens: 4000
 
   coder_v3:
     name: "CoderAgentV3"
@@ -64,17 +61,26 @@ agents:
       work_dir: "temp_code_v3"
       use_docker: false
       timeout: 60
-    llm_config_override:
-      temperature: 0.0
-      max_tokens: 5000
 
   reporter_v3:
     name: "ReporterAgentV3"
     role: "reporter"
     system_message: "你是報告者智能體，負責整理所有研究和分析結果，生成詳細的最終報告。請以 JSON 格式回應，並在完成時明確標示 'WORKFLOW_COMPLETE'。"
+
+  background_investigator_v3:
+    name: "BackgroundInvestigatorAgentV3"
+    role: "background_investigator"
+    system_message: "你是背景調查者智能體，負責在正式研究開始前收集相關的背景資訊和上下文。使用搜尋工具收集基礎資料，為後續研究提供背景知識。請以 JSON 格式回應調查結果。"
+    tools:
+      - "web_search"
+      - "crawl_website"
     llm_config_override:
-      temperature: 0.0
-      max_tokens: 6000
+      temperature: 0.3
+
+  human_feedbacker_v3:
+    name: "HumanFeedbackerAgentV3"
+    role: "human_feedbacker"
+    system_message: "你是人類反饋智能體，負責收集和處理人類用戶的反饋意見。當需要人類確認或修改建議時，你會協助收集用戶輸入並將其整合到工作流程中。請以 JSON 格式回應處理結果。"
 
 # 工作流程配置
 workflows:
@@ -94,6 +100,8 @@ workflows:
         "researcher_v3",
         "coder_v3",
         "reporter_v3",
+        "background_investigator_v3",
+        "human_feedbacker_v3",
       ]
     workflow_type: "selector_group_chat"
     max_turns: 50
@@ -117,7 +125,7 @@ workflows:
 tools:
   web_search:
     provider: "tavily" # tavily, brave_search, duckduckgo, arxiv, grounding_bing
-    max_results: 5
+    # max_results 已移除，使用 param 中的 "Max search results" 設定
 
   code_execution:
     timeout: 60

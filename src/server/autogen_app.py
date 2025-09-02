@@ -38,7 +38,7 @@ from src.server.rag_request import (
     RAGResourcesResponse,
 )
 from src.tools import VolcengineTTS
-from src.logging import get_logger
+from src.deerflow_logging import get_simple_logger as get_logger
 from src.config.tools import SELECTED_RAG_PROVIDER
 
 # 導入 AutoGen 相容性組件

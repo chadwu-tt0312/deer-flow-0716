@@ -26,7 +26,11 @@ from src.llms.llm import get_llm_by_type
 from src.prompts.planner_model import Plan
 from src.prompts.template import apply_prompt_template
 from src.utils.json_utils import repair_json_output
-from src.logging import get_logger, set_thread_context, setup_thread_logging
+from src.deerflow_logging import (
+    get_simple_logger as get_logger,
+    set_thread_context,
+    init_thread_logging as setup_thread_logging,
+)
 
 from .types import State
 from ..config import SELECTED_SEARCH_ENGINE, SearchEngine

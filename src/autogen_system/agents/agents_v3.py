@@ -18,8 +18,21 @@ from autogen_agentchat.agents import AssistantAgent
 from autogen_core.models import ChatCompletionClient
 
 # 專案內部導入
-from src.logging import get_logger
 from src.config.agents import AGENT_LLM_MAP, LLMType
+from src.deerflow_logging import get_thread_logger
+
+
+def _get_logger():
+    """獲取當前 thread 的 logger"""
+    try:
+        return get_thread_logger()
+    except RuntimeError:
+        # 如果沒有設定 thread context，使用簡單的 logger
+        from src.deerflow_logging import get_simple_logger
+
+        return get_simple_logger(__name__)
+
+
 from src.autogen_system.adapters.llm_adapter import create_autogen_model_client
 from src.autogen_system.tools.tools_integration import get_tools_for_agent_type
 # 暫時註釋掉 message_framework 的引用，因為它可能已被刪除
@@ -42,11 +55,11 @@ try:
 except ImportError:
     # 如果模板系統不可用，定義一個簡單的 fallback 函數
     def apply_prompt_template(template_name: str, state: Dict[str, Any]) -> List[Dict[str, str]]:
-        logger.warning(f"模板系統不可用，無法載入 {template_name} 模板")
+        _get_logger().warning(f"模板系統不可用，無法載入 {template_name} 模板")
         return []
 
 
-logger = get_logger(__name__)
+# logger 已移除，使用 _get_logger() 函數
 
 
 class BaseAgentV3:
@@ -77,7 +90,7 @@ class BaseAgentV3:
                 system_message=system_message,
             )
         except Exception as e:
-            logger.warning(f"AssistantAgent 初始化失敗（嘗試不帶 description）: {e}")
+            _get_logger().warning(f"AssistantAgent 初始化失敗（嘗試不帶 description）: {e}")
             # 如果帶 description 失敗，嘗試最簡化的初始化
             self._agent = AssistantAgent(
                 name=name,
@@ -85,10 +98,11 @@ class BaseAgentV3:
                 system_message=system_message,
             )
 
-        logger.info(f"智能體 {name} 初始化完成，工具數量: {len(self.tools)}")
+        _get_logger().info(f"智能體 {name} 初始化完成，工具數量: {len(self.tools)}")
         # 紀錄所有工具名稱
         for tool in self.tools:
-            logger.info(f"工具名稱: {tool.name}")
+            tool_name = getattr(tool, "name", getattr(tool, "__name__", str(tool)))
+            _get_logger().info(f"工具名稱: {tool_name}")
 
     @classmethod
     async def create(cls, config: Dict[str, Any], **kwargs):
@@ -100,7 +114,7 @@ class BaseAgentV3:
 
         agent_config = config.get("agents", {}).get(agent_key, {})
         role = agent_config.get("role", agent_key.replace("_v3", ""))
-        logger.info(f"role: {role}")
+        _get_logger().info(f"role: {role}")
 
         # 獲取基本配置
         name = agent_config.get("name", cls.__name__)
@@ -120,12 +134,12 @@ class BaseAgentV3:
             template_messages = apply_prompt_template(role, template_state)
             if template_messages and len(template_messages) > 0:
                 system_message = template_messages[0].get("content", "")
-                logger.info(f"成功載入{role}模板")
+                _get_logger().info(f"成功載入{role}模板")
             else:
                 raise ValueError("模板應用失敗")
 
         except Exception as e:
-            logger.warning(f"載入{role}模板失敗，使用配置檔案中的系統訊息: {e}")
+            _get_logger().warning(f"載入{role}模板失敗，使用配置檔案中的系統訊息: {e}")
             system_message = agent_config.get(
                 "system_message", f"你是{role}智能體，負責{role}相關任務。"
             )
@@ -154,6 +168,11 @@ class BaseAgentV3:
             "researcher": ["web_search", "crawl_website"],  # 研究者需要搜尋和爬蟲工具
             "coder": ["python_repl"],  # 程式設計師需要程式碼執行工具
             "reporter": [],  # 報告者通常不需要特定工具
+            "background_investigator": [
+                "web_search",
+                "crawl_website",
+            ],  # 背景調查者需要搜尋和爬蟲工具
+            "human_feedbacker": [],  # 人類反饋智能體不需要特定工具
         }
 
         # 獲取工具名稱列表
@@ -178,7 +197,7 @@ class BaseAgentV3:
                 return tools
 
             except Exception as e:
-                logger.error(f"獲取工具失敗: {e}")
+                _get_logger().error(f"獲取工具失敗: {e}")
                 return []
 
         return []
@@ -289,6 +308,44 @@ class ReporterAgentV3(BaseAgentV3):
         return await super().create(config, agent_key="reporter_v3")
 
 
+class BackgroundInvestigatorAgentV3(BaseAgentV3):
+    """背景調查者智能體 V3"""
+
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        system_message: str,
+        model_client: ChatCompletionClient,
+        tools: List[Callable] = None,
+    ):
+        super().__init__(name, description, system_message, model_client, tools)
+
+    @classmethod
+    async def create(cls, config: Dict[str, Any], **kwargs):
+        """創建背景調查者智能體"""
+        return await super().create(config, agent_key="background_investigator_v3")
+
+
+class HumanFeedbackerAgentV3(BaseAgentV3):
+    """人類反饋智能體 V3"""
+
+    def __init__(
+        self,
+        name: str,
+        description: str,
+        system_message: str,
+        model_client: ChatCompletionClient,
+        tools: List[Callable] = None,
+    ):
+        super().__init__(name, description, system_message, model_client, tools)
+
+    @classmethod
+    async def create(cls, config: Dict[str, Any], **kwargs):
+        """創建人類反饋智能體"""
+        return await super().create(config, agent_key="human_feedbacker_v3")
+
+
 # 便利函數
 async def create_all_agents_v3(config: Dict[str, Any]) -> Dict[str, BaseAgentV3]:
     """
@@ -300,7 +357,7 @@ async def create_all_agents_v3(config: Dict[str, Any]) -> Dict[str, BaseAgentV3]
     Returns:
         Dict[str, BaseAgentV3]: 智能體字典
     """
-    logger.info("開始創建所有 V3 智能體...")
+    _get_logger().info("開始創建所有 V3 智能體...")
 
     agents = {}
 
@@ -310,8 +367,10 @@ async def create_all_agents_v3(config: Dict[str, Any]) -> Dict[str, BaseAgentV3]
     agents["researcher"] = await ResearcherAgentV3.create(config)
     agents["coder"] = await CoderAgentV3.create(config)
     agents["reporter"] = await ReporterAgentV3.create(config)
+    agents["background_investigator"] = await BackgroundInvestigatorAgentV3.create(config)
+    agents["human_feedbacker"] = await HumanFeedbackerAgentV3.create(config)
 
-    logger.info(f"V3 智能體創建完成，共 {len(agents)} 個")
+    _get_logger().info(f"V3 智能體創建完成，共 {len(agents)} 個")
     return agents
 
 

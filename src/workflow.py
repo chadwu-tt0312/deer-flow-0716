@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 
 from src.graph import build_graph
-from src.logging import get_logger
+from src.deerflow_logging import get_simple_logger as get_logger
 
 logger = get_logger(__name__)
 
