@@ -38,7 +38,7 @@ from src.server.rag_request import (
     RAGResourcesResponse,
 )
 from src.tools import VolcengineTTS
-from src.deerflow_logging import get_simple_logger as get_logger
+from src.deerflow_logging import get_logger
 from src.config.tools import SELECTED_RAG_PROVIDER
 
 # 導入 AutoGen 相容性組件
@@ -50,6 +50,82 @@ from src.autogen_system.compatibility import (
 logger = get_logger(__name__)
 
 INTERNAL_SERVER_ERROR_DETAIL = "Internal Server Error"
+
+
+async def execute_workflow_with_selector(
+    request: ChatRequest, selector_function: callable
+) -> StreamingResponse:
+    """
+    使用簡化的選擇器執行工作流
+
+    Args:
+        request: 聊天請求
+        selector_function: 選擇器函數
+
+    Returns:
+        StreamingResponse: 流式響應
+    """
+    try:
+        # 創建 SelectorGroupChat 工作流
+        from src.autogen_system.examples.selector_group_chat_example import run_workflow_example
+
+        # 提取用戶輸入
+        user_input = ""
+        if request.messages:
+            for msg in reversed(request.messages):
+                if msg.role == "user":
+                    user_input = msg.content if isinstance(msg.content, str) else str(msg.content)
+                    break
+
+        logger.info(f"執行工作流，用戶輸入: {user_input}")
+
+        # 使用簡化的選擇器執行工作流
+        # 這裡可以進一步簡化，直接調用 SelectorGroupChat
+        from autogen_agentchat.teams import SelectorGroupChat
+        from src.autogen_system.agents.agents_v3 import get_agent_list
+        from src.llms.llm import get_default_model_client
+
+        # 獲取智能體列表和模型客戶端
+        agent_list = get_agent_list()
+        model_client = get_default_model_client()
+
+        # 創建 SelectorGroupChat
+        team = SelectorGroupChat(
+            participants=agent_list,
+            model_client=model_client,
+            selector_func=selector_function,
+            max_turns=50,
+        )
+
+        logger.info("✅ SelectorGroupChat 創建成功")
+
+        # 執行工作流並返回流式響應
+        from autogen_agentchat.console import Console
+
+        async def stream_generator():
+            try:
+                async for event in Console(team.run_stream(task=user_input)):
+                    # 將 AutoGen 事件轉換為 SSE 格式
+                    yield f"data: {event}\n\n"
+            except Exception as e:
+                logger.error(f"工作流執行錯誤: {e}")
+                yield f"data: {{'error': '{str(e)}'}}\n\n"
+
+        return StreamingResponse(
+            stream_generator(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+            },
+        )
+
+    except Exception as e:
+        logger.error(f"工作流執行失敗: {e}")
+        # 返回錯誤響應
+        error_response = f"data: {{'error': '{str(e)}'}}\n\n"
+        return StreamingResponse(iter([error_response]), media_type="text/event-stream")
+
 
 # 創建 FastAPI 應用
 app = FastAPI(
@@ -71,15 +147,44 @@ app.add_middleware(
 @app.post("/api/chat/stream")
 async def chat_stream(request: ChatRequest):
     """
-    聊天流式端點 - AutoGen 版本
+    聊天流式端點 - AutoGen 版本（簡化方案 A）
 
-    使用 AutoGen 系統處理聊天請求，但保持與原有 API 的相容性。
+    直接從前端參數創建選擇器，跳過中間的配置轉換層。
     """
-    logger.info("AutoGen Chat stream started")
+    logger.info("AutoGen Chat stream started (簡化方案 A)")
 
     try:
-        # 使用 AutoGen API 服務器處理請求
-        return await get_autogen_chat_stream(request)
+        # 方案 A：完全簡化 - 直接從前端參數創建選擇器
+        from src.autogen_system.compatibility.api_adapter import (
+            create_selector_from_frontend_params,
+        )
+
+        # 直接創建選擇器，跳過中間層
+        selector_function = create_selector_from_frontend_params(
+            max_plan_iterations=request.max_plan_iterations or 1,
+            max_step_num=request.max_step_num or 3,
+            max_search_results=request.max_search_results or 3,
+            auto_accepted_plan=request.auto_accepted_plan or False,
+            enable_background_investigation=request.enable_background_investigation or True,
+            debug=request.debug or False,
+        )
+
+        logger.info("✅ 成功創建簡化選擇器函數")
+
+        # 記錄選擇器配置用於驗證
+        if hasattr(selector_function, "selector"):
+            selector = selector_function.selector
+            logger.info(f"選擇器配置驗證:")
+            logger.info(f"  - max_plan_iterations: {selector.max_plan_iterations}")
+            logger.info(f"  - max_step_num: {selector.max_step_num}")
+            logger.info(f"  - auto_accepted_plan: {selector.auto_accepted_plan}")
+            logger.info(
+                f"  - enable_background_investigation: {selector.enable_background_investigation}"
+            )
+            logger.info(f"  - max_search_results: {selector.max_search_results}")
+
+        # 使用簡化的選擇器執行工作流
+        return await execute_workflow_with_selector(request, selector_function)
 
     except Exception as e:
         logger.error(f"AutoGen 聊天流處理失敗: {e}")

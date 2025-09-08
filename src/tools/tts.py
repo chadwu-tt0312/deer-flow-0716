@@ -7,13 +7,13 @@ Text-to-Speech module using volcengine TTS API.
 
 import json
 import uuid
-import logging
+from src.deerflow_logging import get_logger
 import requests
 from typing import Optional, Dict, Any
 
 from src.utils.network_config import network_config
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class VolcengineTTS:

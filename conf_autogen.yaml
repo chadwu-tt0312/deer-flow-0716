@@ -4,12 +4,39 @@
 # environment: production
 # debug: false
 
+# =====================================
+# 📋 重要配置說明
+# =====================================
+# 🎯 動態模板系統 (Template-Only Mode)：
+#    - 所有智能體的 system_message 都從動態模板載入
+#    - 不再使用配置文件中的靜態 system_message
+#    - 模板載入失敗將直接拋出異常，系統停止運行
+#    - 確保以下模板文件存在且可用：
+#      * coordinator.md
+#      * planner.md
+#      * researcher.md
+#      * coder.md
+#      * reporter.md
+#      * background_investigator.md
+#      * human_feedbacker.md
+#
+# 🤖 研究團隊 (Research Team)：
+#    - 這是虛擬智能體，不需要在此配置
+#    - 由 AgentSelector 內部邏輯處理協調
+#
+# ⚙️ selector_config 參數：
+#    - max_plan_iterations: 最大計劃迭代次數
+#    - max_step_num: 計劃中的最大步驟數
+#    - auto_accepted_plan: 是否自動接受計劃
+#    - enable_background_investigation: 是否啟用背景調查
+# =====================================
+
 # AutoGen 基本設定
 autogen:
   # 預設 LLM 配置
   default_llm_config:
     temperature: 0.0
-    max_tokens: 100000
+    max_tokens: 100_000
     timeout: 30
 
   # 智能體基本設定
@@ -17,33 +44,25 @@ autogen:
     human_input_mode: "NEVER"
     code_execution_config: false
 
-  # 群組對話設定
-  group_chat:
-    admin_name: "Admin"
-    # speaker_selection_method: "auto"
-    # allow_repeat_speaker: true
-    # max_round 已移除，使用 .env 中的 AGENT_RECURSION_LIMIT 設定 (=30)
+  # 群組對話設定已移除，AutoGen SelectorGroupChat 不使用這些設定
 
 # 智能體角色配置
 agents:
   coordinator_v3:
     name: "CoordinatorAgentV3"
     role: "coordinator"
-    system_message: "你是協調者智能體，負責分析任務需求並協調整個研究工作流程。請以結構化的 JSON 格式回應，包含任務分析和工作流程策略。"
     llm_config_override:
       temperature: 0.3
 
   planner_v3:
     name: "PlannerAgentV3"
     role: "planner"
-    system_message: "你是規劃者智能體，負責制定詳細的執行計劃。請將任務分解為具體步驟，並以 JSON 格式回應計劃內容。"
     llm_config_override:
       temperature: 0.4
 
   researcher_v3:
     name: "ResearcherAgentV3"
     role: "researcher"
-    system_message: "你是研究者智能體，負責網路搜尋和資訊收集。使用可用工具進行研究，並以 JSON 格式回應研究結果。"
     tools:
       - "web_search"
       - "crawl_website"
@@ -54,7 +73,6 @@ agents:
   coder_v3:
     name: "CoderAgentV3"
     role: "coder"
-    system_message: "你是程式設計師智能體，負責程式碼分析和執行。使用 Python 執行環境進行數據處理和分析，並以 JSON 格式回應執行結果。"
     tools:
       - "python_repl"
     code_execution_config:
@@ -65,12 +83,10 @@ agents:
   reporter_v3:
     name: "ReporterAgentV3"
     role: "reporter"
-    system_message: "你是報告者智能體，負責整理所有研究和分析結果，生成詳細的最終報告。請以 JSON 格式回應，並在完成時明確標示 'WORKFLOW_COMPLETE'。"
 
   background_investigator_v3:
     name: "BackgroundInvestigatorAgentV3"
     role: "background_investigator"
-    system_message: "你是背景調查者智能體，負責在正式研究開始前收集相關的背景資訊和上下文。使用搜尋工具收集基礎資料，為後續研究提供背景知識。請以 JSON 格式回應調查結果。"
     tools:
       - "web_search"
       - "crawl_website"
@@ -80,46 +96,14 @@ agents:
   human_feedbacker_v3:
     name: "HumanFeedbackerAgentV3"
     role: "human_feedbacker"
-    system_message: "你是人類反饋智能體，負責收集和處理人類用戶的反饋意見。當需要人類確認或修改建議時，你會協助收集用戶輸入並將其整合到工作流程中。請以 JSON 格式回應處理結果。"
 
-# 工作流程配置
-workflows:
-  research:
-    enabled_agents:
-      ["coordinator", "planner", "researcher", "coder", "reporter"]
-    workflow_type: "sequential_with_feedback"
-    human_feedback_steps: ["plan_review"]
-    max_iterations: 3
-
-  # V3 版本工作流程 (AutoGen SelectorGroupChat)
-  research_v3:
-    enabled_agents:
-      [
-        "coordinator_v3",
-        "planner_v3",
-        "researcher_v3",
-        "coder_v3",
-        "reporter_v3",
-        "background_investigator_v3",
-        "human_feedbacker_v3",
-      ]
-    workflow_type: "selector_group_chat"
-    max_turns: 50
-    allow_repeated_speaker: true
-    termination_keywords: ["WORKFLOW_COMPLETE", "TERMINATE"]
-    selector_config:
-      use_custom_selector: true
-      fallback_to_model: true
-      max_selection_attempts: 3
-
-  podcast:
-    enabled_agents:
-      ["coordinator", "script_writer", "tts_generator", "audio_mixer"]
-    workflow_type: "pipeline"
-
-  ppt:
-    enabled_agents: ["coordinator", "content_organizer", "slide_generator"]
-    workflow_type: "pipeline"
+# AgentSelector 配置 - 只保留實際使用的參數
+selector_config:
+  max_plan_iterations: 1
+  max_step_num: 3
+  max_search_results: 3
+  auto_accepted_plan: true
+  enable_background_investigation: false
 
 # 工具配置
 tools:
@@ -135,13 +119,6 @@ tools:
       - "numpy"
       - "matplotlib"
       - "requests"
-
-  mcp_servers:
-    github_trending:
-      transport: "stdio"
-      command: "uvx"
-      args: ["mcp-github-trending"]
-      enabled_tools: ["get_github_trending_repositories"]
 
 # 模型配置
 BASIC_MODEL:

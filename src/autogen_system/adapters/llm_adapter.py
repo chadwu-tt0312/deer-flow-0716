@@ -23,10 +23,10 @@ from autogen_core.models import (
     FinishReasons,
 )
 
-import logging
+from src.deerflow_logging import get_logger
 
-# 使用標準 logging 避免循環導入
-logger = logging.getLogger(__name__)
+# 使用 deerflow_logging 統一日誌系統
+logger = get_logger(__name__)
 
 # 暫時簡化 - 避免復雜依賴
 try:

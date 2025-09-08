@@ -52,7 +52,10 @@ from src.autogen_system.agents.message_framework import (
     parse_workflow_message,
 )
 from src.autogen_system.tools.tools_integration import initialize_all_tools
-from src.autogen_system.workflow import create_selector_function, AgentSelector
+from src.autogen_system.workflow import (
+    create_selector_function,
+    AgentSelector,
+)
 
 # 初始化 thread-safe 日誌
 init_thread_logging()
@@ -79,6 +82,11 @@ for handler in thread_logger_instance.handlers:
 
 autogen_logger.setLevel(logging.INFO)
 autogen_core_logger.setLevel(logging.INFO)
+
+# 完全禁用 autogen_core.events 的日誌輸出
+autogen_events_logger = logging.getLogger("autogen_core.events")
+autogen_events_logger.setLevel(logging.CRITICAL + 1)  # 設定為比 CRITICAL 更高的級別
+autogen_events_logger.disabled = True  # 完全禁用
 
 
 class WorkflowState:
@@ -122,53 +130,6 @@ class WorkflowState:
             if step_id not in self.completed_steps:
                 return step
 
-        return None
-
-
-# 創建全局選擇器實例
-_global_selector = None
-
-
-def get_selector_func(selector_type: str = "basic", **kwargs):
-    """
-    獲取選擇器函數
-
-    Args:
-        selector_type: 選擇器類型 ("basic" 或 "advanced")
-        **kwargs: 選擇器初始化參數
-
-    Returns:
-        callable: 選擇器函數
-    """
-    global _global_selector
-
-    if _global_selector is None:
-        _global_selector = create_selector_function(
-            selector_type=selector_type, enable_debug=True, **kwargs
-        )
-
-    return _global_selector
-
-
-def selector_func(messages: Sequence[BaseAgentEvent | BaseChatMessage]) -> str | None:
-    """
-    智能體選擇函數（重構版本）
-
-    使用新的 AgentSelector 類來決定下一個應該發言的智能體。
-    保持與原始函數相同的介面以確保向後兼容性。
-
-    Args:
-        messages: 對話歷史訊息
-
-    Returns:
-        str | None: 下一個智能體的名稱，或 None 讓模型自動選擇
-    """
-    try:
-        # 獲取選擇器函數
-        selector = get_selector_func()
-        return selector(messages)
-    except Exception as e:
-        logger.error(f"Selector 函數執行錯誤: {e}")
         return None
 
 
@@ -248,7 +209,10 @@ async def run_workflow_example(task: str, config_path: str = "conf_autogen.yaml"
         model_client = agents["coordinator"]._model_client
 
         # 獲取選擇器函數（可以選擇 "basic" 或 "advanced"）
-        selector_function = get_selector_func(selector_type="basic", max_turns=50)
+        # 使用新的配置化函數，自動載入 selector_config 參數
+        selector_function = create_selector_function(
+            config=config, selector_type="basic", max_turns=50, enable_debug=True
+        )
 
         # 創建 SelectorGroupChat
         # 注意：參數名稱可能因版本而異，嘗試不同的參數名稱

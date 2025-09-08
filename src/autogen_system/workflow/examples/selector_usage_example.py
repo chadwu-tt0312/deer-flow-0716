@@ -22,11 +22,11 @@ from src.autogen_system.workflow import (
     AgentName,
     WorkflowPhase,
 )
-from src.deerflow_logging import init_simple_logging, get_simple_logger
+from src.deerflow_logging import init_thread_logging, get_logger
 
 # 初始化日誌
-init_simple_logging()
-logger = get_simple_logger(__name__)
+init_thread_logging()
+logger = get_logger(__name__)
 
 
 class MockMessage:

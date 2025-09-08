@@ -10,7 +10,7 @@ API 相容性層使用範例
 import asyncio
 from typing import Dict, Any
 
-from src.deerflow_logging import get_simple_logger as get_logger
+from src.deerflow_logging import get_logger
 from src.config.report_style import ReportStyle
 from src.autogen_system.compatibility import (
     AutoGenAPIAdapter,

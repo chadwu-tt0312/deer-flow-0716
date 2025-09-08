@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
 # SPDX-License-Identifier: MIT
 
-import logging
+from src.deerflow_logging import get_logger
 from datetime import timedelta
 from typing import Any, Dict, List, Optional
 
@@ -10,7 +10,7 @@ from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from mcp.client.sse import sse_client
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 async def _get_tools_from_client_session(
@@ -68,9 +68,7 @@ async def load_mcp_tools(
     try:
         if server_type == "stdio":
             if not command:
-                raise HTTPException(
-                    status_code=400, detail="Command is required for stdio type"
-                )
+                raise HTTPException(status_code=400, detail="Command is required for stdio type")
 
             server_params = StdioServerParameters(
                 command=command,  # Executable
@@ -84,18 +82,12 @@ async def load_mcp_tools(
 
         elif server_type == "sse":
             if not url:
-                raise HTTPException(
-                    status_code=400, detail="URL is required for sse type"
-                )
+                raise HTTPException(status_code=400, detail="URL is required for sse type")
 
-            return await _get_tools_from_client_session(
-                sse_client(url=url), timeout_seconds
-            )
+            return await _get_tools_from_client_session(sse_client(url=url), timeout_seconds)
 
         else:
-            raise HTTPException(
-                status_code=400, detail=f"Unsupported server type: {server_type}"
-            )
+            raise HTTPException(status_code=400, detail=f"Unsupported server type: {server_type}")
 
     except Exception as e:
         if not isinstance(e, HTTPException):

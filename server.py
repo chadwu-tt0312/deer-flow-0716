@@ -18,12 +18,15 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Import DeerFlow logging
-from src.logging import init_logging, get_logger
+from src.deerflow_logging import init_thread_logging, get_thread_logger, set_thread_context
 
 # Initialize DeerFlow logging
-init_logging()
+init_thread_logging()
 
-logger = get_logger(__name__)
+# 設定 thread context（使用固定的 thread_id 用於 server）
+thread_id = "deerflow_server"
+set_thread_context(thread_id)
+logger = get_thread_logger()
 
 # 額外控制 watchfiles 的日誌級別，減少檔案監控的日誌輸出
 import logging

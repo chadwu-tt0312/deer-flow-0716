@@ -14,14 +14,77 @@ from datetime import datetime
 
 from autogen_core.models import ChatCompletionClient
 
-from src.deerflow_logging import get_simple_logger as get_logger
+from src.deerflow_logging import get_logger
 from src.config.report_style import ReportStyle
 from src.rag.retriever import Resource
 
-# 移除不存在的導入，使用實際的配置類別
-from src.config.report_style import ReportStyle
-
 logger = get_logger(__name__)
+
+
+def create_selector_from_frontend_params(
+    max_plan_iterations: int = 1,
+    max_step_num: int = 3,
+    max_search_results: int = 3,
+    auto_accepted_plan: bool = False,
+    enable_background_investigation: bool = True,
+    debug: bool = False,
+    **kwargs,
+) -> callable:
+    """
+    直接從前端參數創建選擇器函數 - 簡化版本
+
+    跳過中間的配置轉換層，直接將前端參數傳遞給選擇器。
+
+    Args:
+        max_plan_iterations: 最大計劃迭代次數
+        max_step_num: 最大步驟數
+        max_search_results: 最大搜尋結果數
+        auto_accepted_plan: 是否自動接受計劃
+        enable_background_investigation: 是否啟用背景調查
+        debug: 除錯模式
+        **kwargs: 其他參數
+
+    Returns:
+        callable: 配置化的選擇器函數
+    """
+    from src.autogen_system.workflow import create_selector_function
+
+    # 直接創建 selector_config，無需中間層
+    selector_config = {
+        "max_plan_iterations": max_plan_iterations,
+        "max_step_num": max_step_num,
+        "max_search_results": max_search_results,
+        "auto_accepted_plan": auto_accepted_plan,
+        "enable_background_investigation": enable_background_investigation,
+    }
+
+    config = {"selector_config": selector_config}
+
+    logger.info(f"直接創建選擇器: {selector_config}")
+
+    return create_selector_function(
+        config=config, selector_type="basic", enable_debug=debug, **kwargs
+    )
+
+
+def create_selector_function_with_api_config(config: Dict[str, Any], **override_kwargs) -> callable:
+    """
+    根據 API 配置創建選擇器函數 - 向後兼容版本
+
+    Args:
+        config: 包含 selector_config 的配置字典
+        **override_kwargs: 覆蓋配置的參數
+
+    Returns:
+        callable: 配置化的選擇器函數
+    """
+    from src.autogen_system.workflow import create_selector_function
+
+    logger.info(f"使用 API 配置創建選擇器: {config.get('selector_config', {})}")
+
+    return create_selector_function(
+        config=config, selector_type="basic", enable_debug=True, **override_kwargs
+    )
 
 
 class AutoGenAPIAdapter:
@@ -92,7 +155,7 @@ class AutoGenAPIAdapter:
         return ""
 
     def _create_config(self, **kwargs) -> Dict[str, Any]:
-        """創建對話配置"""
+        """創建對話配置，包含選擇器配置"""
         return {
             "enable_background_investigation": kwargs.get("enable_background_investigation", True),
             "max_plan_iterations": kwargs.get("max_plan_iterations", 1),
@@ -104,6 +167,16 @@ class AutoGenAPIAdapter:
             "report_style": kwargs.get("report_style", ReportStyle.ACADEMIC),
             "resources": kwargs.get("resources", []),
             "mcp_settings": kwargs.get("mcp_settings", {}),
+            # 新增：選擇器配置 - 從前端參數映射到 selector_config
+            "selector_config": {
+                "max_plan_iterations": kwargs.get("max_plan_iterations", 1),
+                "max_step_num": kwargs.get("max_step_num", 3),
+                "max_search_results": kwargs.get("max_search_results", 3),
+                "auto_accepted_plan": kwargs.get("auto_accepted_plan", False),
+                "enable_background_investigation": kwargs.get(
+                    "enable_background_investigation", True
+                ),
+            },
         }
 
     async def _get_workflow_manager(self, thread_id: str, config: Dict[str, Any]) -> Any:
@@ -250,6 +323,7 @@ async def run_agent_workflow_async(
     report_style: ReportStyle = ReportStyle.ACADEMIC,
     mcp_settings: Dict[str, Any] = None,
     model_client: ChatCompletionClient = None,
+    max_search_results: int = 3,  # 新增參數
     **kwargs,
 ) -> Dict[str, Any]:
     """
@@ -268,12 +342,16 @@ async def run_agent_workflow_async(
         report_style: 報告風格
         mcp_settings: MCP 設定
         model_client: 模型客戶端
+        max_search_results: 最大搜尋結果數
         **kwargs: 其他參數
 
     Returns:
         Dict[str, Any]: 執行結果
     """
     logger.info(f"執行智能體工作流: {user_input}")
+    logger.info(
+        f"前端參數 - max_plan_iterations: {max_plan_iterations}, max_step_num: {max_step_num}, auto_accepted_plan: {auto_accepted_plan}"
+    )
 
     if not model_client:
         # 如果沒有提供模型客戶端，需要從全域配置取得
@@ -281,11 +359,8 @@ async def run_agent_workflow_async(
 
         model_client = get_default_model_client()
 
-    # 創建 API 適配器
-    adapter = AutoGenAPIAdapter(model_client)
-
     try:
-        # 準備參數
+        # 準備參數並創建配置
         messages = [{"role": "user", "content": user_input}]
 
         config_params = {
@@ -297,8 +372,32 @@ async def run_agent_workflow_async(
             "resources": resources or [],
             "report_style": report_style,
             "mcp_settings": mcp_settings or {},
+            "max_search_results": max_search_results,
             **kwargs,
         }
+
+        # 簡化：直接從前端參數創建選擇器，跳過中間層
+        selector_function = create_selector_from_frontend_params(
+            max_plan_iterations=max_plan_iterations,
+            max_step_num=max_step_num,
+            max_search_results=max_search_results,
+            auto_accepted_plan=auto_accepted_plan,
+            enable_background_investigation=enable_background_investigation,
+            debug=debug,
+            **kwargs,
+        )
+        logger.info("✅ 成功創建簡化選擇器函數")
+
+        # 記錄選擇器配置用於驗證
+        if hasattr(selector_function, "selector"):
+            selector = selector_function.selector
+            logger.info(f"選擇器配置驗證:")
+            logger.info(f"  - max_plan_iterations: {selector.max_plan_iterations}")
+            logger.info(f"  - max_step_num: {selector.max_step_num}")
+            logger.info(f"  - auto_accepted_plan: {selector.auto_accepted_plan}")
+            logger.info(
+                f"  - enable_background_investigation: {selector.enable_background_investigation}"
+            )
 
         # 收集所有事件
         events = []
@@ -326,9 +425,19 @@ async def run_agent_workflow_async(
             "final_report": final_content,
             "events": events,
             "execution_metadata": execution_metadata,
+            "selector_config_used": api_config.get(
+                "selector_config", {}
+            ),  # 新增：返回使用的選擇器配置
             "debug_info": {
                 "total_events": len(events),
                 "completed_at": datetime.now().isoformat(),
+                "frontend_params": {
+                    "max_plan_iterations": max_plan_iterations,
+                    "max_step_num": max_step_num,
+                    "auto_accepted_plan": auto_accepted_plan,
+                    "enable_background_investigation": enable_background_investigation,
+                    "max_search_results": max_search_results,
+                },
             }
             if debug
             else None,

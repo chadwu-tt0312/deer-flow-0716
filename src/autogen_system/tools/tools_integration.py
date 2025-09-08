@@ -20,9 +20,9 @@ def _get_logger():
         return get_thread_logger()
     except RuntimeError:
         # 如果沒有設定 thread context，使用簡單的 logger
-        from src.deerflow_logging import get_simple_logger
+        from src.deerflow_logging import get_logger
 
-        return get_simple_logger(__name__)
+        return get_logger(__name__)
 
 
 from src.tools import (

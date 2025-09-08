@@ -21,8 +21,8 @@ from src.autogen_system.workflow import (
     WorkflowPhase,
 )
 from src.deerflow_logging import (
-    init_simple_logging as init_logging,
-    get_simple_logger as get_logger,
+    init_thread_logging as init_logging,
+    get_logger,
 )
 
 # 初始化日誌

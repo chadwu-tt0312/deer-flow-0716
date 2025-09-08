@@ -1,9 +1,10 @@
 # Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
 # SPDX-License-Identifier: MIT
 
-import logging
 import os
 from typing import List, Optional
+
+from src.deerflow_logging import get_logger
 
 from langchain_community.tools import BraveSearch, DuckDuckGoSearchResults
 from langchain_community.tools.arxiv import ArxivQueryRun
@@ -20,7 +21,7 @@ from src.tools.grounding_bing_search.grounding_bing_search_tool import (
 
 from src.tools.decorators import create_logged_tool
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Create logged versions of the search tools
 LoggedTavilySearch = create_logged_tool(TavilySearchResultsWithImages)

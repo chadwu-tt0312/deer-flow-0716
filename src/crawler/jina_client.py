@@ -1,14 +1,14 @@
 # Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
 # SPDX-License-Identifier: MIT
 
-import logging
+from src.deerflow_logging import get_logger
 import os
 
 import requests
 
 from src.utils.network_config import network_config
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class JinaClient:

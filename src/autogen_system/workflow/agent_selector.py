@@ -14,7 +14,7 @@ from dataclasses import dataclass
 
 from autogen_agentchat.messages import BaseAgentEvent, BaseChatMessage
 
-from src.deerflow_logging import get_simple_logger
+from src.deerflow_logging import get_logger, get_thread_logger
 from ..agents.message_framework import (
     parse_workflow_message,
     MessageType,
@@ -22,7 +22,18 @@ from ..agents.message_framework import (
     extract_workflow_info,
 )
 
-logger = get_simple_logger(__name__)
+
+# 延遲初始化 logger，避免在模組導入時就調用 get_thread_logger
+class LazyLogger:
+    def __getattr__(self, name):
+        try:
+            return getattr(get_thread_logger(), name)
+        except RuntimeError as e:
+            # 如果 thread context 未設定，使用 get_logger 作為備用
+            return getattr(get_logger(__name__), name)
+
+
+logger = LazyLogger()
 
 
 class AgentName(str, Enum):
@@ -33,6 +44,7 @@ class AgentName(str, Enum):
     RESEARCHER = "ResearcherAgentV3"
     CODER = "CoderAgentV3"
     REPORTER = "ReporterAgentV3"
+    RESEARCH_TEAM = "ResearchTeamCoordinator"  # 新增研究團隊協調者（虛擬角色）
 
     USER = "user"
     BACKGROUND_INVESTIGATOR = "BackgroundInvestigatorAgentV3"
@@ -47,6 +59,7 @@ class WorkflowPhase(str, Enum):
     BACKGROUND_INVESTIGATION = "background_investigation"
     PLANNING = "planning"
     HUMAN_FEEDBACK = "human_feedback"
+    RESEARCH_TEAM_COORDINATION = "research_team_coordination"  # 新增研究團隊協調階段
     EXECUTION = "execution"
     REPORTING = "reporting"
     COMPLETED = "completed"
@@ -66,8 +79,8 @@ class SelectionContext:
     max_plan_iterations: int = 1
     max_step_num: int = 3
     max_search_results: int = 3
-    auto_accepted_plan: bool = True
-    enable_background_investigation: bool = True
+    auto_accepted_plan: bool = False
+    enable_background_investigation: bool = False
     current_plan_iterations: int = 0
 
     def __post_init__(self):
@@ -85,8 +98,8 @@ class AgentSelector:
         max_plan_iterations: int = 1,
         max_step_num: int = 3,
         max_search_results: int = 3,
-        auto_accepted_plan: bool = True,
-        enable_background_investigation: bool = True,
+        auto_accepted_plan: bool = False,
+        enable_background_investigation: bool = False,
     ):
         """
         初始化選擇器
@@ -214,6 +227,8 @@ class AgentSelector:
             return WorkflowPhase.BACKGROUND_INVESTIGATION
         elif last_speaker == AgentName.PLANNER:
             return WorkflowPhase.PLANNING
+        elif last_speaker == AgentName.RESEARCH_TEAM:
+            return WorkflowPhase.RESEARCH_TEAM_COORDINATION
         elif last_speaker in [AgentName.RESEARCHER, AgentName.CODER]:
             return WorkflowPhase.EXECUTION
         elif last_speaker == AgentName.REPORTER:
@@ -231,6 +246,7 @@ class AgentSelector:
             WorkflowPhase.BACKGROUND_INVESTIGATION: self._handle_background_investigation_phase,
             WorkflowPhase.PLANNING: self._handle_planning_phase,
             WorkflowPhase.HUMAN_FEEDBACK: self._handle_human_feedback_phase,
+            WorkflowPhase.RESEARCH_TEAM_COORDINATION: self._handle_research_team_coordination_phase,
             WorkflowPhase.EXECUTION: self._handle_execution_phase,
             WorkflowPhase.REPORTING: self._handle_reporting_phase,
             WorkflowPhase.COMPLETED: self._handle_completed_phase,
@@ -333,36 +349,17 @@ class AgentSelector:
         logger.info(f"3. Selector: 總步驟: {[s.get('id', 'unknown') for s in total_steps]}")
         logger.info(f"3. Selector: 已完成步驟集合: {completed_steps}")
 
-        if len(completed_steps) >= len(total_steps):
-            # 所有步驟完成，增加迭代次數並重新規劃
-            self.current_plan_iterations += 1
-            logger.info(
-                f"3. Selector: 所有步驟已完成，計劃迭代次數增加到 {self.current_plan_iterations}"
-            )
+        # 注意：這裡不再處理迭代計數邏輯，迭代計數將在研究團隊協調階段處理
+        # 這確保了與 LangGraph 流程的語義一致性：所有步驟完成 -> 迭代次數+1 -> 重新規劃
 
-            # 檢查是否達到迭代上限
-            if self.current_plan_iterations >= context.max_plan_iterations:
-                logger.info("3. Selector: 達到計劃迭代上限，轉到報告者")
-                return AgentName.REPORTER
-            else:
-                logger.info("3. Selector: 未達迭代上限，重新規劃")
-                return AgentName.PLANNER
-
-        # 如果自動接受計劃，直接進入執行階段
+        # 如果自動接受計劃，進入研究團隊協調階段（與 LangGraph 流程一致）
         if context.auto_accepted_plan:
-            logger.info("3. Selector: 自動接受計劃，尋找下一個執行步驟")
-            logger.info(f"3. Selector: 總步驟數: {len(total_steps)}, 已完成步驟: {completed_steps}")
-            next_step = self._find_next_step(total_steps, completed_steps)
-            if next_step:
-                logger.info(f"3. Selector: 找到下一個步驟: {next_step.get('id', 'unknown')}")
-                return self._select_agent_for_step(next_step)
-            else:
-                logger.info("3. Selector: 找不到未完成步驟，轉到報告者")
-                return AgentName.REPORTER
+            logger.info("3. Selector: 自動接受計劃，轉到研究團隊協調階段")
+            return self._simulate_research_team_coordination(total_steps, completed_steps)
         else:
             # 需要人工回饋
             logger.info("3. Selector: 需要人工回饋，轉到人工回饋階段")
-            return "HumanFeedback"  # 這裡需要對應實際的人工回饋處理
+            return AgentName.HUMAN_FEEDBACKER
 
     def _handle_human_feedback_phase(self, context: SelectionContext) -> str:
         """處理人工回饋階段"""
@@ -373,15 +370,13 @@ class AgentSelector:
             logger.info("3.5. Selector: 計劃需要修改，轉回規劃者")
             return AgentName.PLANNER
         elif "[ACCEPTED]" in content or context.auto_accepted_plan:
-            logger.info("3.5. Selector: 計劃被接受，轉到執行階段")
+            logger.info("3.5. Selector: 計劃被接受，轉到研究團隊協調階段")
             # 這裡需要找到下一個執行步驟
             if context.parsed_message and context.parsed_message.message_type == MessageType.PLAN:
                 plan_data = context.parsed_message.data
                 completed_steps = set(plan_data.get("completed_steps", []))
                 total_steps = plan_data.get("steps", [])
-                next_step = self._find_next_step(total_steps, completed_steps)
-                if next_step:
-                    return self._select_agent_for_step(next_step)
+                return self._simulate_research_team_coordination(total_steps, completed_steps)
 
             # 如果找不到步驟，轉到報告者
             logger.info("3.5. Selector: 找不到執行步驟，轉到報告者")
@@ -397,22 +392,22 @@ class AgentSelector:
                 logger.info("4. Selector: 需要更多研究，保持在研究者")
                 return AgentName.RESEARCHER
             else:
-                logger.info("4. Selector: 研究步驟完成，更新執行結果並轉回規劃者檢查下一步")
-                # 這裡可以更新步驟完成狀態
-                return AgentName.PLANNER
+                logger.info("4. Selector: 研究步驟完成，轉回研究團隊協調檢查下一步")
+                # 標記步驟完成並回到研究團隊協調
+                return self._return_to_research_team_coordination(context)
 
         elif context.last_speaker == AgentName.CODER:
             if "more_coding_needed" in context.last_message_content:
                 logger.info("4. Selector: 需要更多程式碼工作，保持在程式設計師")
                 return AgentName.CODER
             else:
-                logger.info("4. Selector: 程式碼步驟完成，更新執行結果並轉回規劃者檢查下一步")
-                # 這裡可以更新步驟完成狀態
-                return AgentName.PLANNER
+                logger.info("4. Selector: 程式碼步驟完成，轉回研究團隊協調檢查下一步")
+                # 標記步驟完成並回到研究團隊協調
+                return self._return_to_research_team_coordination(context)
 
-        # 預設返回規劃者協調下一步
-        logger.info("4. Selector: 執行階段完成，轉回規劃者協調")
-        return AgentName.PLANNER
+        # 預設返回研究團隊協調
+        logger.info("4. Selector: 執行階段完成，轉回研究團隊協調")
+        return self._return_to_research_team_coordination(context)
 
     def _handle_reporting_phase(self, context: SelectionContext) -> Optional[str]:
         """處理報告階段"""
@@ -487,10 +482,72 @@ class AgentSelector:
         self.workflow_state["completed_steps"].add(step_id)
         logger.info(f"步驟 {step_id} 已標記為完成")
 
+    def _handle_research_team_coordination_phase(self, context: SelectionContext) -> str:
+        """處理研究團隊協調階段（模擬 LangGraph 中的 Research Team 節點）"""
+        logger.info("3.6. Selector: 研究團隊協調階段 - 檢查待執行步驟")
+
+        # 嘗試從上下文中獲取計劃資訊
+        if context.parsed_message and context.parsed_message.message_type == MessageType.PLAN:
+            plan_data = context.parsed_message.data
+            completed_steps = set(plan_data.get("completed_steps", []))
+            total_steps = plan_data.get("steps", [])
+        else:
+            # 如果沒有解析的計劃，嘗試從工作流程資訊中獲取
+            completed_steps = set(context.workflow_info.get("completed_steps", []))
+            total_steps = context.workflow_info.get("steps", [])
+
+        return self._coordinate_research_team(total_steps, completed_steps)
+
+    def _simulate_research_team_coordination(
+        self, total_steps: List[Dict[str, Any]], completed_steps: set
+    ) -> str:
+        """模擬研究團隊協調邏輯（對應 LangGraph 流程圖中的 Research Team 節點）"""
+        logger.info("3.6. Selector: 模擬研究團隊協調 - 檢查步驟執行狀態")
+        return self._coordinate_research_team(total_steps, completed_steps)
+
+    def _coordinate_research_team(
+        self, total_steps: List[Dict[str, Any]], completed_steps: set
+    ) -> str:
+        """協調研究團隊，決定下一個執行步驟或完成狀態"""
+        logger.info(f"研究團隊協調: 總步驟數={len(total_steps)}, 已完成={len(completed_steps)}")
+
+        # 檢查是否所有步驟都已完成
+        if len(completed_steps) >= len(total_steps):
+            logger.info("研究團隊協調: 所有步驟已完成，增加迭代次數並回到規劃者")
+            # 這裡與 LangGraph 流程一致：所有步驟完成 -> 迭代次數+1 -> 回到 Planner
+            self.current_plan_iterations += 1
+            return AgentName.PLANNER
+
+        # 尋找下一個未完成步驟
+        next_step = self._find_next_step(total_steps, completed_steps)
+        if next_step:
+            logger.info(f"研究團隊協調: 找到下一個步驟 {next_step.get('id', 'unknown')}")
+            return self._select_agent_for_step(next_step)
+        else:
+            logger.info("研究團隊協調: 找不到未完成步驟，轉到報告者")
+            return AgentName.REPORTER
+
+    def _return_to_research_team_coordination(self, context: SelectionContext) -> str:
+        """從執行階段返回研究團隊協調階段"""
+        logger.info("4.5. Selector: 步驟執行完成，返回研究團隊協調階段")
+
+        # 這裡我們模擬研究團隊協調的邏輯
+        # 由於我們沒有真實的 Research Team 智能體，我們直接執行協調邏輯
+        if context.parsed_message and context.parsed_message.message_type == MessageType.PLAN:
+            plan_data = context.parsed_message.data
+            completed_steps = set(plan_data.get("completed_steps", []))
+            total_steps = plan_data.get("steps", [])
+            return self._coordinate_research_team(total_steps, completed_steps)
+        else:
+            # 如果無法獲取計劃資訊，回到規劃者重新評估
+            logger.info("4.5. Selector: 無法獲取計劃資訊，回到規劃者重新評估")
+            return AgentName.PLANNER
+
     def reset(self):
         """重設選擇器狀態"""
         self.turn_count = 0
         self.workflow_state.clear()
+        self.current_plan_iterations = 0  # 重設迭代計數
         logger.info("智能體選擇器已重設")
 
 
@@ -547,17 +604,23 @@ class AdvancedAgentSelector(AgentSelector):
         return self.agent_usage_count.copy()
 
 
-def create_selector_function(selector_type: str = "basic", **kwargs) -> callable:
+def create_selector_function(config: dict, selector_type: str = "basic", **kwargs) -> callable:
     """
     創建選擇器函數的工廠函數
 
     Args:
+        config: 配置字典
         selector_type: 選擇器類型 ("basic" 或 "advanced")
         **kwargs: 選擇器初始化參數
 
     Returns:
         callable: 選擇器函數
     """
+    # 從配置中讀取 selector_config
+    selector_config = config.get("selector_config", {})
+    # 合併配置設定和參數（參數優先）
+    kwargs = {**selector_config, **kwargs}
+
     if selector_type == "advanced":
         selector = AdvancedAgentSelector(**kwargs)
     else:

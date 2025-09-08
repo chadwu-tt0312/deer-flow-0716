@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Bytedance Ltd. and/or its affiliates
 # SPDX-License-Identifier: MIT
 
-import logging
+from src.deerflow_logging import get_logger
 from typing import Annotated
 from langchain_core.tools import tool
 from langchain_experimental.utilities import PythonREPL
@@ -9,15 +9,13 @@ from .decorators import log_io
 
 # Initialize REPL and logger
 repl = PythonREPL()
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 @tool
 @log_io
 def python_repl_tool(
-    code: Annotated[
-        str, "The python code to execute to do further analysis or calculation."
-    ],
+    code: Annotated[str, "The python code to execute to do further analysis or calculation."],
 ):
     """Use this to execute python code and do data analysis or calculation. If you want to see the output of a value,
     you should print it out with `print(...)`. This is visible to the user."""

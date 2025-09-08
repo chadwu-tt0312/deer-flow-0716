@@ -19,10 +19,10 @@ from src.llms.llm import get_configured_llm_models
 from src.rag.retriever import Resource
 from src.server.chat_request import ChatRequest
 from src.deerflow_logging import (
-    get_simple_logger as get_logger,
+    get_logger,
+    get_thread_logger,
     set_thread_context,
     clear_thread_context,
-    setup_thread_logging,
 )
 
 from .api_adapter import AutoGenAPIAdapter
@@ -240,8 +240,8 @@ class AutoGenAPIServer:
         try:
             # 設定執行緒上下文
             # 使用新的 Thread-specific 日誌系統
-            thread_logger = setup_thread_logging(thread_id)
             set_thread_context(thread_id)
+            thread_logger = get_thread_logger()
 
             # 記錄 thread 開始
             thread_logger.info(f"開始處理 AutoGen 對話: {thread_id}")

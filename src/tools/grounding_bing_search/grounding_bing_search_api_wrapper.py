@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 
 import json
-import logging
+from src.deerflow_logging import get_logger
 import os
 import time
 from typing import Dict, List, Optional
@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from src.utils.network_config import network_config
 from src.utils.http_client import http_client
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class GroundingBingSearchConfig(BaseModel):

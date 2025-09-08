@@ -14,9 +14,9 @@ from dataclasses import dataclass, asdict
 from datetime import datetime
 from enum import Enum
 
-from src.deerflow_logging import get_simple_logger
+from src.deerflow_logging import get_logger
 
-logger = get_simple_logger(__name__)
+logger = get_logger(__name__)
 
 
 class MessageType(str, Enum):

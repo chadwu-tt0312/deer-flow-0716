@@ -11,7 +11,7 @@ import json
 from typing import Dict, List, Any, Optional, AsyncGenerator
 from datetime import datetime
 
-from src.deerflow_logging import get_simple_logger as get_logger
+from src.deerflow_logging import get_logger
 
 logger = get_logger(__name__)
 

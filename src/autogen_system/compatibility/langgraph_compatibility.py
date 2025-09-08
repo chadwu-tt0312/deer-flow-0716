@@ -15,7 +15,7 @@ from datetime import datetime
 # 使用實際的 AutoGen 類別
 from autogen_core.models import ChatCompletionClient
 
-from src.deerflow_logging import get_simple_logger as get_logger
+from src.deerflow_logging import get_logger
 from src.config.report_style import ReportStyle
 from src.rag.retriever import Resource
 

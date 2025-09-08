@@ -28,9 +28,9 @@ def _get_logger():
         return get_thread_logger()
     except RuntimeError:
         # 如果沒有設定 thread context，使用簡單的 logger
-        from src.deerflow_logging import get_simple_logger
+        from src.deerflow_logging import get_logger
 
-        return get_simple_logger(__name__)
+        return get_logger(__name__)
 
 
 from src.autogen_system.adapters.llm_adapter import create_autogen_model_client
@@ -48,15 +48,9 @@ from src.autogen_system.tools.tools_integration import get_tools_for_agent_type
 #     create_error_message,
 # )
 
-# 模板系統導入
-try:
-    from src.prompts.template import apply_prompt_template
-    from src.config.configuration import Configuration
-except ImportError:
-    # 如果模板系統不可用，定義一個簡單的 fallback 函數
-    def apply_prompt_template(template_name: str, state: Dict[str, Any]) -> List[Dict[str, str]]:
-        _get_logger().warning(f"模板系統不可用，無法載入 {template_name} 模板")
-        return []
+# 模板系統導入 - 只支持動態模板
+from src.prompts.template import apply_prompt_template
+from src.config.configuration import Configuration
 
 
 # logger 已移除，使用 _get_logger() 函數
@@ -120,7 +114,7 @@ class BaseAgentV3:
         name = agent_config.get("name", cls.__name__)
         description = agent_config.get("description", f"負責{role}相關任務")
 
-        # 嘗試讀取模板
+        # 只使用動態模板系統
         system_message = None
         try:
             template_state = {
@@ -134,15 +128,16 @@ class BaseAgentV3:
             template_messages = apply_prompt_template(role, template_state)
             if template_messages and len(template_messages) > 0:
                 system_message = template_messages[0].get("content", "")
-                _get_logger().info(f"成功載入{role}模板")
+                _get_logger().info(f"✅ 成功載入 {role} 動態模板")
             else:
-                raise ValueError("模板應用失敗")
+                raise ValueError(f"模板 {role} 返回空內容")
 
         except Exception as e:
-            _get_logger().warning(f"載入{role}模板失敗，使用配置檔案中的系統訊息: {e}")
-            system_message = agent_config.get(
-                "system_message", f"你是{role}智能體，負責{role}相關任務。"
-            )
+            # 直接記錄異常，不使用靜態配置回退
+            _get_logger().error(f"❌ 動態模板 {role} 載入失敗: {e}")
+            _get_logger().error(f"模板系統異常詳情: {type(e).__name__}: {str(e)}")
+            # 拋出異常，讓調用者知道模板系統失敗
+            raise RuntimeError(f"智能體 {role} 的動態模板載入失敗，無法創建智能體") from e
 
         # 獲取 LLM 客戶端（根據智能體類型選擇合適的 LLM）
         llm_type = cls._get_llm_type(role)

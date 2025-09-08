@@ -2,13 +2,14 @@
 # SPDX-License-Identifier: MIT
 
 import os
-import logging
 import json
 from typing import Dict, Optional, Any
 from urllib.parse import urlparse
 from datetime import datetime
 
-logger = logging.getLogger(__name__)
+from src.deerflow_logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class NetworkConfig:

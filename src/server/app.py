@@ -41,11 +41,13 @@ from src.server.rag_request import (
 )
 from src.tools import VolcengineTTS
 from src.deerflow_logging import (
-    get_simple_logger as get_logger,
+    get_logger,
+    get_thread_logger,
     set_thread_context,
     clear_thread_context,
-    init_thread_logging as setup_thread_logging,
+    init_thread_logging,
 )
+# 移除 setup_thread_logging 導入，改用 deerflow_logging 中的函數
 
 logger = get_logger(__name__)
 
@@ -349,8 +351,8 @@ async def _astream_workflow_generator(
 ):
     # 設定執行緒上下文（所有後續日誌都會記錄到 thread-specific 檔案）
     # 使用新的 Thread-specific 日誌系統
-    thread_logger = setup_thread_logging(thread_id)
     set_thread_context(thread_id)
+    thread_logger = get_thread_logger()
 
     # 記錄 thread 開始
     thread_logger.info(f"開始處理新對話: {thread_id}")

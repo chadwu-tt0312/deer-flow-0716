@@ -27,10 +27,12 @@ from src.prompts.planner_model import Plan
 from src.prompts.template import apply_prompt_template
 from src.utils.json_utils import repair_json_output
 from src.deerflow_logging import (
-    get_simple_logger as get_logger,
+    get_logger,
+    get_thread_logger,
     set_thread_context,
-    init_thread_logging as setup_thread_logging,
+    init_thread_logging,
 )
+# 移除 setup_thread_logging 導入，改用 deerflow_logging 中的函數
 
 from .types import State
 from ..config import SELECTED_SEARCH_ENGINE, SearchEngine
@@ -71,8 +73,8 @@ def background_investigation_node(state: State, config: RunnableConfig):
     # 設定執行緒上下文
     thread_id = get_thread_id_from_config(config)
     # 使用新的 Thread-specific 日誌系統
-    thread_logger = setup_thread_logging(thread_id)
     set_thread_context(thread_id)
+    thread_logger = get_thread_logger()
 
     thread_logger.info("background investigation node is running.")
     configurable = Configuration.from_runnable_config(config)
@@ -109,8 +111,8 @@ def planner_node(
     # 設定執行緒上下文
     thread_id = get_thread_id_from_config(config)
     # 使用新的 Thread-specific 日誌系統
-    thread_logger = setup_thread_logging(thread_id)
     set_thread_context(thread_id)
+    thread_logger = get_thread_logger()
 
     thread_logger.info("Planner generating full plan")
     configurable = Configuration.from_runnable_config(config)
@@ -191,8 +193,8 @@ def human_feedback_node(
     if config:
         thread_id = get_thread_id_from_config(config)
         # 使用新的 Thread-specific 日誌系統
-        thread_logger = setup_thread_logging(thread_id)
         set_thread_context(thread_id)
+        thread_logger = get_thread_logger()
 
     current_plan = state.get("current_plan", "")
     # check if the plan is auto accepted
@@ -255,8 +257,8 @@ def coordinator_node(
     thread_id = get_thread_id_from_config(config)
 
     # 使用新的 Thread-specific 日誌系統
-    thread_logger = setup_thread_logging(thread_id)
     set_thread_context(thread_id)
+    thread_logger = get_thread_logger()
 
     thread_logger.info("Coordinator talking.")
     configurable = Configuration.from_runnable_config(config)
@@ -319,8 +321,8 @@ def reporter_node(state: State, config: RunnableConfig):
     # 設定執行緒上下文
     thread_id = get_thread_id_from_config(config)
     # 使用新的 Thread-specific 日誌系統
-    thread_logger = setup_thread_logging(thread_id)
     set_thread_context(thread_id)
+    thread_logger = get_thread_logger()
 
     thread_logger.info("Reporter write final report")
     configurable = Configuration.from_runnable_config(config)
@@ -366,8 +368,8 @@ def research_team_node(state: State, config: RunnableConfig = None):
     if config:
         thread_id = get_thread_id_from_config(config)
         # 使用新的 Thread-specific 日誌系統
-        thread_logger = setup_thread_logging(thread_id)
         set_thread_context(thread_id)
+        thread_logger = get_thread_logger()
 
     if thread_logger:
         thread_logger.info("Research team is collaborating on tasks.")
@@ -385,8 +387,8 @@ async def _execute_agent_step(
     if config:
         thread_id = get_thread_id_from_config(config)
         # 使用新的 Thread-specific 日誌系統
-        thread_logger = setup_thread_logging(thread_id)
         set_thread_context(thread_id)
+        thread_logger = get_thread_logger()
 
     current_plan = state.get("current_plan")
     observations = state.get("observations", [])
@@ -587,8 +589,8 @@ async def researcher_node(
     # 設定執行緒上下文
     thread_id = get_thread_id_from_config(config)
     # 使用新的 Thread-specific 日誌系統
-    thread_logger = setup_thread_logging(thread_id)
     set_thread_context(thread_id)
+    thread_logger = get_thread_logger()
 
     thread_logger.info("Researcher node is researching.")
     configurable = Configuration.from_runnable_config(config)
@@ -610,8 +612,8 @@ async def coder_node(state: State, config: RunnableConfig) -> Command[Literal["r
     # 設定執行緒上下文
     thread_id = get_thread_id_from_config(config)
     # 使用新的 Thread-specific 日誌系統
-    thread_logger = setup_thread_logging(thread_id)
     set_thread_context(thread_id)
+    thread_logger = get_thread_logger()
 
     thread_logger.info("Coder node is coding.")
     return await _setup_and_execute_agent_step(
